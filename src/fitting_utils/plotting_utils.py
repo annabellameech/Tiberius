@@ -2,7 +2,6 @@
 #### Contact: jameskirk@live.co.uk
 
 import matplotlib.pyplot as plt
-import matplotlib as mpl
 import numpy as np
 from scipy.optimize import curve_fit
 import astropy.constants as c
@@ -13,7 +12,7 @@ from global_utils import parseInput
 from fitting_utils import mcmc_utils as mc
 from scipy.stats import chi2 as c2
 from scipy.special import erfinv
-from corner import corner,overplot_lines
+
 
 ### FUNCTIONS USEFUL FOR THE PLOTTING OF DATA
 
@@ -96,7 +95,7 @@ def chi2_trans_models(model,data,up_error,low_error,NDOF=0):
 
 
 
-def rayleigh_slope(Teq,logg,Rp,Rstar,rp,rp_up,rp_low,wvl_bin_centres,save_output=False,verbose=False):
+def rayleigh_slope(Teq,logg,Rp,Rstar,k,k_up,k_low,wvl_bin_centres,save_output=False,verbose=False):
     """Generate a Rayleigh scattering slope given the planet and host stars parameters. Note: currently not tested for new transit model classes.
 
     Inputs:
@@ -104,9 +103,9 @@ def rayleigh_slope(Teq,logg,Rp,Rstar,rp,rp_up,rp_low,wvl_bin_centres,save_output
     logg - surface gravity of the planet, in c.g.s.
     Rp - radius of the planet, in Jupiter radii
     Rstar - radius of the star, in solar radii
-    rp - the list of Rp/Rs as measured for the transmission spectrum
-    rp_up - the positive errors in rp
-    rp_low - the negative errors in rp
+    k - the list of Rp/Rs as measured for the transmission spectrum
+    k_up - the positive errors in k
+    k_low - the negative errors in k
     wvl_bin_centres - the centres of the wavelength bins as used in the transmission spectrum, in Angstroms
     save_output - True/False - use this to save the chi squared of fits of a flat line, Rayleigh slope at Teq and a Rayleigh slope with a fitted temperature to a table called 'trans_models_statistics.txt'. Default=False
     verbose - True/False - use this to plot the different slopes along with the transmission spectrum. Default=False
@@ -123,16 +122,16 @@ def rayleigh_slope(Teq,logg,Rp,Rstar,rp,rp_up,rp_low,wvl_bin_centres,save_output
 
     H = calc_scale_height(g,Teq)
     scale_height_radius = rp/H
-    rp_rs = rp
+    rp_rs = k
     rp_H = rp_rs*rs/H - scale_height_radius
     rs_H = rs/H
 
     # To initialise Rayleigh fits
     guess_slope = -4*H
-    guess_intercept = max(rp*rs)
-    rp_error = (np.mean((rp_up,rp_low),axis=0)/rp)*(rp*rs) # weights on fit
+    guess_intercept = max(k*rs)
+    rp_error = (np.mean((k_up,k_low),axis=0)/k)*(k*rs) # weights on fit
     xdata = np.log(wvl_bin_centres*1e-10) # Need log(lambda) for Rayleigh fit xdata
-    ydata = (rp*rs)
+    ydata = (k*rs)
 
     popt,pcov=curve_fit(straight_line,xdata,ydata,p0=[guess_slope,guess_intercept],sigma=rp_error)
 
@@ -149,30 +148,30 @@ def rayleigh_slope(Teq,logg,Rp,Rstar,rp,rp_up,rp_low,wvl_bin_centres,save_output
     fitted_slope_resampled = -4*H_fit*np.log(resampled_x)/rs
 
     fitted_slope = -4*H_fit*np.log(wvl_bin_centres)/rs
-    offset_fit = rp.mean()-fitted_slope.mean()
+    offset_fit = k.mean()-fitted_slope.mean()
 
     fitted_slope = fitted_slope + offset_fit # offset applied
     fitted_slope_resampled = fitted_slope_resampled + offset_fit # offset applied
-    chi2_Tfit,rchi2_Tfit = chi2_trans_models(fitted_slope,rp,rp_up,rp_low,NDOF=1)
-    BIC_Tfit = chi2_Tfit+1*np.log(len(rp))
+    chi2_Tfit,rchi2_Tfit = chi2_trans_models(fitted_slope,k,k_up,k_low,NDOF=1)
+    BIC_Tfit = chi2_Tfit+1*np.log(len(k))
 
     equilibrium_slope_resampled = -4*H*np.log(resampled_x)/rs
 
 
     equilibrium_slope = -4*H*np.log(wvl_bin_centres)/rs
-    offset_eq = (rp.mean()-equilibrium_slope.mean())
+    offset_eq = (k.mean()-equilibrium_slope.mean())
 
     equilibrium_slope = equilibrium_slope + offset_eq # offset applied
     equilibrium_slope_resampled = equilibrium_slope_resampled + offset_eq
-    chi2_Teq,rchi2_Teq = chi2_trans_models(equilibrium_slope,rp,rp_up,rp_low)
+    chi2_Teq,rchi2_Teq = chi2_trans_models(equilibrium_slope,k,k_up,k_low)
 
-    flat_line = np.average(rp,weights=1/(np.sqrt(rp_up**2+rp_low**2)))
-    flat_line = np.array([flat_line]*len(rp))
-    chi2_flat,rchi2_flat = chi2_trans_models(flat_line,rp,rp_up,rp_low)
+    flat_line = np.average(k,weights=1/(np.sqrt(k_up**2+k_low**2)))
+    flat_line = np.array([flat_line]*len(k))
+    chi2_flat,rchi2_flat = chi2_trans_models(flat_line,k,k_up,k_low)
 
     if verbose:
         plt.figure()
-        plt.errorbar(wvl_bin_centres,rp,yerr=(rp_low,rp_up),fmt='o',color='k',ecolor='k')
+        plt.errorbar(wvl_bin_centres,k,yerr=(k_low,k_up),fmt='o',color='k',ecolor='k')
         plt.plot(resampled_x,equilibrium_slope_resampled,'g--')
         plt.plot(wvl_bin_centres,equilibrium_slope,'g')
         plt.plot(resampled_x,fitted_slope_resampled,'r--')
@@ -242,9 +241,9 @@ def plot_models(model_list,time,flux_array,error_array,wvl_centre,rebin_data=Non
         tc = model_list[0].t0
     except:
         try:
-            tc = model_list[0].param_dict['t0'].currVal
+            tc = model_list[0].pars['t0'].currVal
         except:
-            tc = model_list[0].param_dict['t0']
+            tc = model_list[0].pars['t0']
 
     fig = plt.figure(figsize=(8,10))
 
@@ -271,21 +270,13 @@ def plot_models(model_list,time,flux_array,error_array,wvl_centre,rebin_data=Non
         # calculate transit model
         model_y = model_list[i].calc(t)
 
-        # if gp:
-        #     mu,std = model_list[i].calc_gp_component(t,flux_array[i],error_array[i])
-        #     residuals = flux_array[i] - model_y - mu
-        #     RMS = model_list[i].rms(t,flux_array[i],error_array[i])
-        # else:
-        #     residuals = flux_array[i]-model_y
-        #     RMS = model_list[i].rms(t,flux_array[i])
-
-        if model_list[i].GP_used:
-            mu, _ = model_list[i].calc_gp_component()
-            residuals = (model_list[i].calc_residuals() - mu)
+        if gp:
+            mu,std = model_list[i].calc_gp_component(t,flux_array[i],error_array[i])
+            residuals = flux_array[i] - model_y - mu
+            RMS = model_list[i].rms(t,flux_array[i],error_array[i])
         else:
-            residuals = model_list[i].calc_residuals()
-
-        RMS = np.sqrt(np.mean(residuals**2))
+            residuals = flux_array[i]-model_y
+            RMS = model_list[i].rms(t,flux_array[i])
 
         print("RMS/photon noise = %.2f"%(RMS/error_array[i].mean()))
 
@@ -369,8 +360,7 @@ def plot_models(model_list,time,flux_array,error_array,wvl_centre,rebin_data=Non
     return fig
 
 
-def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=False,wavelength_bin=None,deconstruct=True,plot_residual_std=0,
-                      systematics_model_inputs=None, save_folder=None):
+def plot_single_model(model,time,flux,error,rebin_data=None,save_fig=False,wavelength_bin=None,deconstruct=True,plot_residual_std=0,systematics_model_inputs=None):
     """
     Plot a single light curve with model.
 
@@ -379,7 +369,6 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
     time - array of times
     flux - array of fluxes
     error - array of errors on fluxes
-    lc_idx - int, lightcurve index in the stack of fitted light curves (index 0 if single lightcurve fit)
     rebin_data - set to integer if wanting to re-bin the data. Default = None (no binning)
     save_fig - True/False: save the figure to file? Default=False
     wavelength_bin - the number of the wavelength bin being plotted, useful for saving to file. Default=None
@@ -392,22 +381,12 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
 
     # figure out whether it's a white light curve
     try:
-        tc = model.param_dict['t_secondary'].currVal
-        model_name = 'eclipse'
+        tc = model.t0.currVal
     except:
         try:
-            tc = model.param_dict['t_secondary']
-            model_name = 'eclipse'
+            tc = model.pars['t0'].currVal
         except:
-            try:
-                tc = model.param_dict['t0'].currVal
-                model_name = 'transit'
-            except:
-                try:
-                    tc = model.param_dict['t0']
-                    model_name = False
-                except:
-                    pass
+            tc = model.pars['t0']
 
     fig = plt.figure()
 
@@ -417,11 +396,9 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
         nsubplots = 2
 
     gp = model.GP_used
-
-    systematics_model = model.systematic_model
-    poly = systematics_model.poly_used
-    exp = systematics_model.exp_ramp_used
-    step = systematics_model.step_func_used
+    poly = model.poly_used
+    exp = model.exp_ramp_used
+    step = model.step_func_used
 
     # convert times from days to hours from mid-transit
     hours = mjd2hours(time,tc)
@@ -432,16 +409,16 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
 
     if poly:# and not gp:
         if deconstruct:
-            oot,poly_components = systematics_model.red_noise_poly(time,deconstruct_polys=True)
+            oot,poly_components = model.red_noise_poly(time,systematics_model_inputs,deconstruct_polys=True)
         else:
-            oot = systematics_model.red_noise_poly(time)
+            oot = model.red_noise_poly(time,systematics_model_inputs)
 
     if exp:
-        exp_ramp = systematics_model.exponential_ramp(time)
+        exp_ramp = model.exponential_ramp(time)
         oot *= exp_ramp
 
     if step:
-        step_func = systematics_model.step_function(time)
+        step_func = model.step_function(time)
         oot *= step_func
 
     if gp:
@@ -472,18 +449,18 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
 
 
     if gp:
-        ax1.plot(hours,mu+model_y,color='r',zorder=10,label='GP & %s model'%model_name)
+        ax1.plot(hours,mu+model_y,color='r',zorder=10,label='GP & transit model')
         ax1.plot(hours,mu+1,color='g',label='GP')
-        ax1.plot(hours,model_y,color='0.75',ls='--',zorder=9,label='%s model'%model_name)
+        ax1.plot(hours,model_y,color='0.75',ls='--',zorder=9,label='Transit model')
         NCOL = 1
 
     if gp:
         ax1.legend(ncol=NCOL,fontsize=6)
 
     if poly and not gp or exp and not gp:
-        ax1.plot(hours,model_y,color='r',zorder=10,label='Systematics & %s model'%model_name,lw=1)
+        ax1.plot(hours,model_y,color='r',zorder=10,label='Systematics & transit model',lw=1)
         ax1.plot(hours,oot,color='g',label='Systematics model',lw=1)
-        ax1.plot(hours,model_y/oot,color='0.75',ls='--',zorder=9,label='%s model'%model_name,lw=1)
+        ax1.plot(hours,model_y/oot,color='0.75',ls='--',zorder=9,label='Transit model',lw=1)
         NCOL = 1
         ax1.legend(ncol=NCOL,fontsize=6)
 
@@ -552,7 +529,7 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
                     color="k", alpha=0.2)
 
     ax2.set_ylabel('Residuals (ppm)')
-    ax2.set_xlabel('Time from mid-%s (hours)'%model_name)
+    ax2.set_xlabel('Time from mid-transit (hours)')
     ax2.tick_params(bottom=True,top=True,left=True,right=True,direction="inout")
     ax2.tick_params(which='minor',bottom=True,top=True,left=True,right=True,direction="inout")#,labelsize=fontsize-4,length=4,width=1.)
 
@@ -565,9 +542,9 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
 
         if rebin_data is None:
             # ~ plt.savefig('fitted_model%s.pdf'%wb,bbox_inches='tight')
-            plt.savefig(save_folder + '/plots/' + f'fitted_model_lc{lc_idx}{wb}.png',bbox_inches='tight',dpi=200)
+            plt.savefig('fitted_model%s.png'%wb,bbox_inches='tight',dpi=200)
         else:
-            plt.savefig(save_folder + '/plots/' + f'fitted_model_lc%s_%s_rebin_%d.png'%(lc_idx,wb,rebin_data),bbox_inches='tight',dpi=200)
+            plt.savefig('fitted_model%s_rebin_%d.png'%(wb,rebin_data),bbox_inches='tight',dpi=200)
 
         plt.close()
 
@@ -577,280 +554,6 @@ def plot_single_model(model,time,flux,error,lc_idx,rebin_data=None,save_fig=Fals
         plt.pause(5)
         plt.close()
 
-    return fig
-
-def plot_multiple_lightcurve(samclass, nlc, lightcurve_objects, sigma=2, 
-                             rebin_data=None, systematics_model_inputs=None, deconstruct=True, 
-                             plot_residual_std=0, save_fig=False, wavelength_bin=None,
-                             save_folder=None):
-    
-    """
-    Plot joint fit in one image.
-    """
-
-    label_size = 25 # used to be 8
-    mpl.rcParams['xtick.labelsize'] = label_size 
-    mpl.rcParams['ytick.labelsize'] = label_size 
-
-    cmap = plt.cm.inferno
-
-    fig, ax = plt.subplots(3, nlc, figsize=[nlc*20,15], gridspec_kw={'height_ratios': [3, 1, 1]})
-
-    for i in range(nlc):
-
-        # Call arrays
-        time = lightcurve_objects[i].time_array
-        flux = lightcurve_objects[i].flux_array
-        error = lightcurve_objects[i].flux_err
-        input_labels = lightcurve_objects[i].input_labels
-
-        models = samclass.get_arrays_for_sigma_plotting()
-
-        if sigma == 2:
-            lcz = models
-        elif sigma == 1:
-            lcz = models[:3]
-        else:
-            raise ValueError("sigma must be 1 or 2")
-
-        lcs = [lc[i] for lc in lcz]
-        
-        hourz = []
-        fluxs = []
-        errors = []
-        modelys = []
-        oots = []
-        mus = []
-        mucs = []
-        polys = []
-        resz = []
-
-        for im, model in enumerate(lcs):
-
-            try:
-                tc = model.t0.currVal
-            except:
-                try:
-                    tc = model.param_dict['t0'].currVal
-                except:
-                    tc = model.param_dict['t0']
-            
-            gp = model.GP_used
-
-            # Call systematic models
-            systematics_model = model.systematic_model
-            poly = systematics_model.poly_used
-            exp = systematics_model.exp_ramp_used
-            step = systematics_model.step_func_used
-
-            # convert times from days to hours from mid-transit
-            hours = mjd2hours(time, tc)
-
-            # calculate M&A transit model
-            model_y = model.calc(time,systematics_model_inputs)
-            modelys.append(model_y)
-            oot = 1
-
-            if poly:# and not gp:
-                if deconstruct:
-                    oot,poly_components = systematics_model.red_noise_poly(time,deconstruct_polys=True)
-                    polys.append(poly_components)
-                else:
-                    oot = systematics_model.red_noise_poly(time)
-
-            if exp:
-                exp_ramp = systematics_model.exponential_ramp(time)
-                oot *= exp_ramp
-
-            if step:
-                step_func = systematics_model.step_function(time)
-                oot *= step_func
-            
-            oots.append(oot)
-
-            if gp:
-                if deconstruct:
-                    mu,std,mu_components = model.calc_gp_component(time,flux,error,deconstruct_gp=True)
-                    mus.append(mu)
-                    mucs.append(mucs)
-                else:
-                    mu,std = model.calc_gp_component(time,flux,error,deconstruct_gp=False)
-                    mus.append(mu)
-                residuals = flux - model_y - mu
-            else:
-                residuals = flux - model_y
-
-            if rebin_data is not None:
-                xp,yp,ep = rebin(np.linspace(time[0],time[-1],rebin_data),time,flux,e=error,errors_from_rms=False)
-                _,yr,_ = rebin(np.linspace(time[0],time[-1],rebin_data),time,residuals,e=error)
-                hp = mjd2hours(xp,tc)
-
-                if im == 0:
-                    org_hours = hours
-                    org_flux = flux
-                    org_error = error
-                    org_residuals = residuals
-            else:
-                hp, yp, ep, yr = hours,flux,error,residuals
-
-            hourz.append(hp)
-            fluxs.append(yp)
-            errors.append(ep)
-            resz.append(yr)
-
-        # Mid value is in the middle of the list of models, which is the model with the best fit to the data
-
-        if rebin_data is not None:
-            ax[0, i].errorbar(org_hours, org_flux, org_error, fmt='.',capsize=0,color='gray',ecolor='gray',alpha=0.25,zorder=0)
-            ax[0, i].errorbar(hourz[0], fluxs[0], errors[0], fmt='o', capsize=2,color='k',ecolor='k',mfc='white',ms=4,alpha=1,mew=2,lw=1.5)
-        else:
-            try:
-                ax[0, i].errorbar(hourz[0], fluxs[0], errors[0], fmt='.', ms=10, elinewidth=2, color=cmap(0.1))
-            except:
-                ax[0].errorbar(hourz[0], fluxs[0], errors[0], fmt='.', ms=10, color=cmap(0.1))
-
-
-        if gp:
-            try:
-                ax[0, i].plot(hourz[0], mus[0]+modelys[0], color=cmap(0.3), zorder=10, label='GP & transit model', linewidth=1.5)
-                ax[0, i].fill_between(hourz[0], mus[1]+modelys[1], mus[2]+modelys[2], alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[0, i].fill_between(hourz[0], mus[3]+modelys[3], mus[4]+modelys[4], alpha=0.1, color=cmap(0.1))
-                ax[0, i].plot(hourz[0], mus[0]+1, color=cmap(0.7), alpha=0.8, ls='--', label='GP', linewidth=1.5)
-                ax[0, i].plot(hourz[0], modelys[0], color=cmap(0.5), alpha=0.8, ls='--',zorder=9,label='Transit model', linewidth=1.5)
-            except:
-                ax[0].plot(hourz[0], mus[0]+modelys[0], color=cmap(0.3), zorder=10, label='GP & transit model', linewidth=1.5)
-                ax[0].fill_between(hourz[0], mus[1]+modelys[1], mus[2]+modelys[2], alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[0].fill_between(hourz[0], mus[3]+modelys[3], mus[4]+modelys[4], alpha=0.1, color=cmap(0.1))
-                ax[0].plot(hourz[0], mus[0]+1, color=cmap(0.7), alpha=0.8, ls='--', label='GP', linewidth=1.5)
-                ax[0].plot(hourz[0], modelys[0], color=cmap(0.5), alpha=0.8, ls='--',zorder=9,label='Transit model', linewidth=1.5)
-
-            if len(mu_components) > 1:
-                alpha = 0.5
-            else:
-                alpha = 1
-            for j,m in enumerate(mucs[0]):
-                try:
-                    ax[1, i].plot(hourz[0],(m*1e6)-(m*1e6).mean(),label='kernel %d'%(j+1),alpha=alpha,lw=1.5,color=cmap(0.5+(0.15*j)))
-                except:
-                    ax[1].plot(hourz[0],(m*1e6)-(m*1e6).mean(),label='kernel %d'%(j+1),alpha=alpha,lw=1.5,color=cmap(0.5+(0.15*j)))
-
-                
-        if poly and not gp or exp and not gp:
-
-            try:
-                ax[0, i].plot(hourz[0], modelys[0], color=cmap(0.3), alpha=0.8, zorder=10,label='Systematics & transit model', lw=3)
-                ax[0, i].fill_between(hourz[0], modelys[2], modelys[1], alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[0, i].fill_between(hourz[0], modelys[3], modelys[4], alpha=0.1, color=cmap(0.2))
-                ax[0, i].plot(hourz[0], oots[0], color=cmap(0.7), alpha=0.9, label='Systematics model', lw=3)
-                ax[0, i].plot(hourz[0], modelys[0]/oots[0], color=cmap(0.5), alpha=0.9, ls='--',zorder=9,label='Transit model',lw=3)
-            except:
-                ax[0].plot(hourz[0], modelys[1], color='red', alpha=0.8, zorder=10,label='Systematics & transit model',lw=1.75)
-                ax[0].plot(hourz[0], modelys[2], color='red', alpha=0.8, zorder=10,label='Systematics & transit model',lw=1.75)
-                ax[0].plot(hourz[0], modelys[0], color=cmap(0.3), alpha=0.8, zorder=10,label='Systematics & transit model',lw=1.75)
-                ax[0].fill_between(hourz[0], modelys[2], modelys[1], alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[0].fill_between(hourz[0], modelys[3], modelys[4], alpha=0.1, color=cmap(0.2))
-                ax[0].plot(hourz[0], oots[0], color=cmap(0.7), alpha=0.9, label='Systematics model',lw=1.75)
-                ax[0].plot(hourz[0], modelys[0]/oots[0], color=cmap(0.5), alpha=0.9, ls='--',zorder=9,label='Transit model',lw=1.75)
-
-
-            if poly:
-                alpha=0.7
-                for j,m in enumerate(polys[0]):
-                    try:
-                        ax[1,i].plot(hourz[0],(m*1e6)-(m*1e6).mean(),label=input_labels[j],alpha=alpha,lw=3,color=cmap(0.5+(0.15*j)))
-                    except:
-                        ax[1].plot(hourz[0],(m*1e6)-(m*1e6).mean(),label=input_labels[j],alpha=alpha,lw=2,color=cmap(0.5+(0.15*j)))
-
-            if exp:
-                try:
-                    ax[1, i].plot(hourz[0],(exp_ramp*1e6)-(exp_ramp*1e6).mean(),label='exponential ramp',alpha=1,lw=1.5)
-                except:
-                    ax[1].plot(hourz[0],(exp_ramp*1e6)-(exp_ramp*1e6).mean(),label='exponential ramp',alpha=1,lw=1.5)
-
-            if step:
-                try:
-                    ax[1, i].plot(hourz[0],(step_func*1e6)-(step_func*1e6).mean(),label='step function',alpha=1,lw=1.5)
-                except:
-                    ax[1].plot(hourz[0],(step_func*1e6)-(step_func*1e6).mean(),label='step function',alpha=1,lw=1.5)
-        
-        if rebin_data is not None:
-            ax[2, i].errorbar(org_hours, 1e6*org_residuals, 1e6*org_error, fmt='.', ms=5, color=cmap(0.3))
-            ax[2, i].errorbar(hourz[0], resz[0]*1e6, errors[0]*1e6, fmt='.', capsize=2,color='k',ecolor='k',mfc='white',ms=4,alpha=1,lw=2,mew=2)
-        else:
-            try:
-                ax[2, i].errorbar(hourz[0], resz[0]*1e6, errors[0]*1e6, fmt='.', ms=10, color=cmap(0.1))
-                ax[2, i].fill_between(hourz[0], resz[1]*1e6, resz[2]*1e6, alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[2, i].fill_between(hourz[0], resz[3]*1e6, resz[4]*1e6, alpha=0.1, color=cmap(0.2))
-            except:
-                ax[2].errorbar(hourz[0], resz[0]*1e6, errors[0]*1e6, fmt='.', ms=10, color=cmap(0.1))
-                ax[2].fill_between(hourz[0], resz[1]*1e6, resz[2]*1e6, alpha=0.3, color=cmap(0.3))
-                if sigma == 2:
-                    ax[2].fill_between(hourz[0], resz[3]*1e6, resz[4]*1e6, alpha=0.1, color=cmap(0.2))
-            # ax[2, i].fill_between(hourz[0], resz[0]*1e6, resz[1]*1e6, alpha=0.3, color=cmap(0.3))
-
-        
-        try:
-            ax[2, i].axhline(0, ls='--', color=cmap(0.3), linewidth=2)
-
-            ax[0, 0].legend(loc='lower right', fontsize=20)
-            ax[0, 1].legend(loc='lower left', fontsize=20)
-            ax[1, 0].legend(loc='lower left', fontsize=20)
-            ax[1, 1].legend(fontsize=20)
-
-            ax[0, i].set_ylabel('Normalized flux', fontsize=25)
-            ax[1, i].set_ylabel('RN component [ppm]',fontsize=18)
-            ax[2, i].set_ylabel('Residuals [ppm]',fontsize=18)
-            ax[2, i].set_xlabel('Time from mid-transit [hours]',fontsize=25)
-        except:
-            ax[2].axhline(0, ls='--', color=cmap(0.3), linewidth=1)
-
-            ax[0].legend(loc='lower left')
-            ax[1].legend()
-
-            ax[0].set_ylabel('Normalized flux', fontsize=14)
-            ax[1].set_ylabel('RN component [ppm]',fontsize=14)
-            ax[2].set_ylabel('Residuals [ppm]',fontsize=14)
-            ax[2].set_xlabel('Time from mid-transit [hours]',fontsize=14)
-
-
-        # if plot_residual_std > 0:
-        #     print("plotting outliers")
-        #     rms = np.sqrt(np.mean(yr**2))*1e6
-
-        #     ax[2, i].axhline(plot_residual_std*rms,ls='--',color='r')
-        #     ax[2, i].axhline(-plot_residual_std*rms,ls='--',color='r')
-
-        #     if gp:
-        #         wn_var = np.exp(model.starting_gp_object.white_noise.get_value(time))
-        #         wn_std = np.sqrt(wn_var)
-        #         plt.fill_between(hours,-plot_residual_std*(std+wn_std),+plot_residual_std*(std+wn_std),
-        #                 color="k", alpha=0.2)
-        
-    if save_fig:
-        if wavelength_bin is not None:
-            wb = '_wb%s'%(str(wavelength_bin+1).zfill(4))
-        else:
-            wb = ''
-
-        if rebin_data is None:
-            # ~ plt.savefig('fitted_model%s.pdf'%wb,bbox_inches='tight')
-            fig.savefig(save_folder + '/plots/' + f'fitted_model_lc_combined{wb}.png',bbox_inches='tight',dpi=200)
-        else:
-            fig.savefig(save_folder + '/plots/' + f'fitted_model_lc_combined_{wb}_rebin_{rebin_data}.png',bbox_inches='tight',dpi=200)
-
-        # fig.close()
-
-    # else:
-        # plt.show()
-        # fig.show(block=False) # only show for 5 seconds. This is necessary when running fits to multiple bins so that the code doesn't have to wait for user to manually close windows before continuing.
-        # fig.pause(5)
-        # fig.close()
-    
     return fig
 
 
@@ -878,15 +581,6 @@ def rebin(xbins,x,y,e=None,weighted=False,errors_from_rms=False):
     for i in range(1,len(xbins)):
         bin_y_vals = y[digitized == i]
         bin_x_vals = x[digitized == i]
-
-        # Remove NaNs
-        mask = np.isfinite(bin_x_vals) & np.isfinite(bin_y_vals)
-        bin_x_vals = bin_x_vals[mask]
-        bin_y_vals = bin_y_vals[mask]
-
-        # Making sure the bin is not empty
-        if len(bin_x_vals) == 0:
-            continue
 
         if weighted:
             if e is None:
@@ -917,18 +611,17 @@ def rebin(xbins,x,y,e=None,weighted=False,errors_from_rms=False):
     ebin = np.array(ebin)
     return (xbin,ybin,ebin)
 
-def recover_transmission_spectrum(directory,lc_idx=0,save_fig=False,plot_fig=True,bin_mask=None,save_to_tab=False,iib=False,plot_depths=False,
-                                  fit_input=None, best_fit_mode='median'):
+def recover_transmission_spectrum(directory,save_fig=False,plot_fig=True,bin_mask=None,save_to_tab=False,print_RpErr_over_RMS=False,iib=False,plot_depths=False):
     """
     A function that generates/recovers the transmission spectrum from the table of best fit parameters resulting from pm_fit.py and gp_fit.py.
 
     Input:
-    directory - the directory containing the best_fit_parameters.dat, fitting_input.txt, fitted_lightcurve_model*.pickle and LD_coefficients.dat files
-    lc_idx    - int, index of lightcurve (0 if single lightcurve fit)
-    save_fig  - True/False: save the outputted transmission spectrum or not? Default=False
-    plot_fig  - True/False: plot the outputted transmission spectrum or not? If False, code returns numpy arrays of Rp/Rs and errors. Default=True
-    bin_mask  - set to a list of integers to mask certain wavelength bins from the transmission spectrum if desired. Indexed from 0. Default = None (no masking).
+    directory - the directory containing the best_fit_parameters.dat, fitting_input.txt, prod_model*.pickle and LD_coefficients.dat files
+    save_fig - True/False: save the outputted transmission spectrum or not? Default=False
+    plot_fig - True/False: plot the outputted transmission spectrum or not? If False, code returns numpy arrays of Rp/Rs and errors. Default=True
+    bin_mask - set to a list of integers to mask certain wavelength bins from the transmission spectrum if desired. Indexed from 0. Default = None (no masking).
     save_to_tab - True/False: if True, saves transmission spectrum to .dat text file. Default=False
+    print_RpErr_over_RMS - True/False - use this to increase verbosity and print how the errors in Rp/Rs compare to the RMS of the residuals and the photon noise. Default=False
     iib - True/False: - If this is an iib fit to Na or K then plot the transmission spectrum with wvl_error on x-axis.
     plot_depths - True/False: - Use this to plot in transit depth rather than Rp/Rs. Default=False (Rp/Rs).
 
@@ -939,49 +632,42 @@ def recover_transmission_spectrum(directory,lc_idx=0,save_fig=False,plot_fig=Tru
     """
 
     try:
-        best_dict = parseInput(directory + '/tables/' + 'best_fit_parameters_GP.txt')
+        best_dict = parseInput(directory+'/best_fit_parameters_GP.txt')
     except:
-        if best_fit_mode == 'median':
-            best_dict = parseInput(directory + '/tables/' + 'fitted_parameters_median.txt')
-        elif best_fit_mode == 'likelihood':
-            best_dict = parseInput(directory + '/tables/' + 'fitted_parameters_max_likelihood.txt')
-        else:
-            raise ValueError("best_fit_mode must be either 'median' or 'likelihood'")
+        best_dict = parseInput(directory+'/best_fit_parameters.txt')
 
-    try:
-        input_dict = fit_input
-    except:
-        input_dict = parseInput("fitting_input.txt")
+    input_dict = parseInput(directory+'/fitting_input.txt')
 
     # load in data
-    x,y,e,e_r,m,m_in,w,we,completed_bins,nbins = load_completed_bins(directory, bin_mask, lc_idx=lc_idx)
+    x,y,e,e_r,m,m_in,w,we,completed_bins,nbins = load_completed_bins(directory,bin_mask)
 
-    rp = []
-    rp_up = []
-    rp_low = []
+    k = []
+    k_up = []
+    k_low = []
     d = []
     d_up = []
     d_low = []
 
-    if "u1" in m[0].param_list_free:
+    if not bool(int(input_dict['fix_u1'])):
         u1 = []
         u1_up = []
         u1_low = []
 
-    if "u2" in m[0].param_list_free:
+    if not bool(int(input_dict['fix_u2'])):
         u2 = []
         u2_up = []
         u2_low = []
 
-    if "u3" in m[0].param_list_free:
-        u3 = []
-        u3_up = []
-        u3_low = []
+    if input_dict["ld_law"] == "nonlinear":
+        if not bool(int(input_dict['fix_u3'])):
+            u3 = []
+            u3_up = []
+            u3_low = []
 
-    if "u4" in m[0].param_list_free:
-        u4 = []
-        u4_up = []
-        u4_low = []
+        if not bool(int(input_dict['fix_u4'])):
+            u4 = []
+            u4_up = []
+            u4_low = []
 
     # calculate the planet's atmospheric scale height which is useful for plotting
     try:
@@ -997,103 +683,121 @@ def recover_transmission_spectrum(directory,lc_idx=0,save_fig=False,plot_fig=Tru
 
     for i,wb in enumerate(completed_bins):
 
-        rp_curr,rp_up_curr,rp_low_curr = mc.parseParam(best_dict['rp_%d'%wb])
-        rp.append(rp_curr)
-        rp_up.append(rp_up_curr)
-        rp_low.append(rp_low_curr)
+        k_curr,k_up_curr,k_low_curr = mc.parseParam(best_dict['k_%d'%wb])
+        k.append(k_curr)
+        k_up.append(k_up_curr)
+        k_low.append(k_low_curr)
 
-        transit_depth = rp_curr**2
-        transit_depth_err_up = transit_depth*2*rp_up_curr/rp_curr
-        transit_depth_err_low = transit_depth*2*rp_low_curr/rp_curr
+        transit_depth = k_curr**2
+        transit_depth_err_up = transit_depth*2*k_up_curr/k_curr
+        transit_depth_err_low = transit_depth*2*k_low_curr/k_curr
         transit_depth_err = np.mean((transit_depth_err_up,transit_depth_err_low))
 
         d.append(transit_depth)
         d_up.append(transit_depth_err_up)
         d_low.append(transit_depth_err_low)
 
-        print('Wavelength bin %d: sigma(Rp/Rs)/H = %.2f'%(i+1,np.maximum(rp_up_curr,rp_low_curr)/H_Rs))
 
-        if "u1" in m[i].param_list_free:
+        if print_RpErr_over_RMS:
+
+
+            GP_model = m[i].GP_used
+            if GP_model:
+                rms = m[i].rms(x[i],y[i],e[i])
+            else:
+                rms = m[i].rms(x[i],y[i])
+
+            print('Wavelength bin %d: sigma(Rp/Rs)/H = %.2f'%(i+1,np.maximum(k_up_curr,k_low_curr)/H_Rs))
+
+            if e_r is not None:
+                # ~ e_r = pickle.load(open(error_list_rescaled[counter],'rb'))
+                if GP_model:
+                    rms_r = m[i].rms(x[i],y[i],e_r[i])
+                else:
+                    rms_r = m[i].rms(x[i],y[i])
+
+        if not bool(int(input_dict['fix_u1'])):
             u1_curr,u1_up_curr,u1_low_curr = mc.parseParam(best_dict['u1_%d'%(wb)])
             u1.append(u1_curr)
             u1_up.append(u1_up_curr)
             u1_low.append(u1_low_curr)
 
-        if "u2" in m[i].param_list_free:
+        if not bool(int(input_dict['fix_u2'])):
             u2_curr,u2_up_curr,u2_low_curr = mc.parseParam(best_dict['u2_%d'%(wb)])
             u2.append(u2_curr)
             u2_up.append(u2_up_curr)
             u2_low.append(u2_low_curr)
 
-        if "u3" in m[i].param_list_free:
-            u3_curr,u3_up_curr,u3_low_curr = mc.parseParam(best_dict['u3_%d'%(wb)])
-            u3.append(u3_curr)
-            u3_up.append(u3_up_curr)
-            u3_low.append(u3_low_curr)
+        if input_dict["ld_law"] == "nonlinear":
+            if not bool(int(input_dict['fix_u3'])):
+                u3_curr,u3_up_curr,u3_low_curr = mc.parseParam(best_dict['u3_%d'%(wb)])
+                u3.append(u3_curr)
+                u3_up.append(u3_up_curr)
+                u3_low.append(u3_low_curr)
 
-        if "u4" in m[i].param_list_free:
-            u4_curr,u4_up_curr,u4_low_curr = mc.parseParam(best_dict['u4_%d'%(wb)])
-            u4.append(u4_curr)
-            u4_up.append(u4_up_curr)
-            u4_low.append(u4_low_curr)
+            if not bool(int(input_dict['fix_u4'])):
+                u4_curr,u4_up_curr,u4_low_curr = mc.parseParam(best_dict['u4_%d'%(wb)])
+                u4.append(u4_curr)
+                u4_up.append(u4_up_curr)
+                u4_low.append(u4_low_curr)
 
-    rp,rp_up,rp_low,d,d_up,d_low = np.array(rp),np.array(rp_up),np.array(rp_low),np.array(d),np.array(d_up),np.array(d_low)
-    if "u1" in m[0].param_list_free:
+    k,k_up,k_low,d,d_up,d_low = np.array(k),np.array(k_up),np.array(k_low),np.array(d),np.array(d_up),np.array(d_low)
+    if not bool(int(input_dict['fix_u1'])):
         u1,u1_up,u1_low = np.array(u1),np.array(u1_up),np.array(u1_low)
 
-    if "u2" in m[0].param_list_free:
+    if not bool(int(input_dict['fix_u2'])):
         u2,u2_up,u2_low = np.array(u2),np.array(u2_up),np.array(u2_low)
 
-    if "u3" in m[0].param_list_free:
-        u3,u3_up,u3_low = np.array(u3),np.array(u3_up),np.array(u3_low)
+    if input_dict["ld_law"] == "nonlinear":
+        if not bool(int(input_dict['fix_u3'])):
+            u3,u3_up,u3_low = np.array(u3),np.array(u3_up),np.array(u3_low)
+        if not bool(int(input_dict['fix_u4'])):
+            u4,u4_up,u4_low = np.array(u4),np.array(u4_up),np.array(u4_low)
 
-    if "u4" in m[0].param_list_free:
-        u4,u4_up,u4_low = np.array(u4),np.array(u4_up),np.array(u4_low)
-
-    print("\nMedian Rp/Rs = %.6f ;  Median Rp/Rs +ve error (ppm) = %d ; Median Rp/Rs -ve error (ppm) = %d \n"%(np.nanmedian(rp),np.nanmedian(rp_up)*1e6,np.nanmedian(rp_low)*1e6))
+    print("\nMedian Rp/Rs = %.6f ;  Median Rp/Rs +ve error (ppm) = %d ; Median Rp/Rs -ve error (ppm) = %d \n"%(np.nanmedian(k),np.nanmedian(k_up)*1e6,np.nanmedian(k_low)*1e6))
 
     if bin_mask is not None:
-        rp = rp[bin_mask]
-        rp_up = rp_up[bin_mask]
-        rp_low = rp_low[bin_mask]
+        k = k[bin_mask]
+        k_up = k_up[bin_mask]
+        k_low = k_low[bin_mask]
         d = d[bin_mask]
         d_up = d_up[bin_mask]
         d_low = d_low[bin_mask]
         w = w[bin_mask]
         we = we[bin_mask]
-        nbins = len(rp)
+        nbins = len(k)
 
     if save_to_tab:
 
-        new_tab = open(directory + '/tables/' + f'transmission_spectrum_{best_fit_mode}.txt','w')
+        new_tab = open('transmission_spectrum.txt','w')
         new_tab.write('# Wavelength bin centre (%s), wavelength bin full width (%s), Rp/Rs, Rp/Rs +ve error, Rp/Rs -ve error'%(determine_wvl_units(w),determine_wvl_units(w)))
 
-        new_tab_2 = open(directory + '/tables/' + f'transmission_spectrum_depths_{best_fit_mode}.txt','w')
+        new_tab_2 = open('transmission_spectrum_depths.txt','w')
         if np.all(d_up == d_low):
             new_tab_2.write('# Wavelength bin centre (%s), wavelength bin full width (%s), Transit depth, Transit depth error'%(determine_wvl_units(w),determine_wvl_units(w)))
         else:
             new_tab_2.write('# Wavelength bin centre (%s), wavelength bin full width (%s), Transit depth, Transit depth +ve error, Transit depth -ve error'%(determine_wvl_units(w),determine_wvl_units(w)))
 
-        if "u1" in m[0].param_list_free:
+        if not bool(int(input_dict['fix_u1'])):
             new_tab.write(', u1, u1 +ve error, u1 -ve error')
             # ~ new_tab_2.write(', u1, u1 +ve error, u1 -ve error')
-        if "u2" in m[0].param_list_free:
+        if not bool(int(input_dict['fix_u2'])):
             new_tab.write(', u2, u2 +ve error, u2 -ve error')
             # ~ new_tab_2.write(', u2, u2 +ve error, u2 -ve error')
 
-        if "u3" in m[0].param_list_free:
-            new_tab.write(', u3, u3 +ve error, u3 -ve error')
-            # ~ new_tab_2.write(', u3, u3 +ve error, u3 -ve error')
-
-        if "u4" in m[0].param_list_free:
-            new_tab.write(', u4, u4 +ve error, u4 -ve error')
-            # ~ new_tab_2.write(', u4, u4 +ve error, u4 -ve error')
+        if input_dict["ld_law"] == "nonlinear":
+            if not bool(int(input_dict['fix_u3'])):
+                new_tab.write(', u3, u3 +ve error, u3 -ve error')
+                # ~ new_tab_2.write(', u3, u3 +ve error, u3 -ve error')
+            if not bool(int(input_dict['fix_u4'])):
+                new_tab.write(', u4, u4 +ve error, u4 -ve error')
+                # ~ new_tab_2.write(', u4, u4 +ve error, u4 -ve error')
 
         new_tab.write('\n')
         new_tab_2.write('\n')
 
         for i in range(nbins):
-            new_tab.write('%f %f %.6f %.6f %.6f'%(w[i],we[i],rp[i],rp_up[i],rp_low[i]))
+            new_tab.write('%f %f %.6f %.6f %.6f'%(w[i],we[i],k[i],k_up[i],k_low[i]))
 
             # only save one depth error column if they're equal. But don't do this for Rp/Rs since compare_transmission_spectra.py relies on 5 column input
             if np.all(d_up == d_low):
@@ -1101,18 +805,19 @@ def recover_transmission_spectrum(directory,lc_idx=0,save_fig=False,plot_fig=Tru
             else:
                 new_tab_2.write('%f %f %.6f %.6f %.6f'%(w[i],we[i],d[i],d_up[i],d_low[i]))
 
-            if "u1" in m[0].param_list_free:
+            if not bool(int(input_dict['fix_u1'])):
                 new_tab.write( ' %.2f %.2f %.2f'%(u1[i],u1_up[i],u1_low[i]))
                 # ~ new_tab_2.write( ' %.2f %.2f %.2f'%(u1[i],u1_up[i],u1_low[i]))
-            if "u2" in m[0].param_list_free:
+            if not bool(int(input_dict['fix_u2'])):
                 new_tab.write( ' %.1f %.1f %.1f'%(u2[i],u2_up[i],u2_low[i]))
                 # ~ new_tab_2.write( ' %.1f %.1f %.1f'%(u2[i],u2_up[i],u2_low[i]))
-            if "u3" in m[0].param_list_free:
-                new_tab.write( ' %.1f %.1f %.1f'%(u3[i],u3_up[i],u3_low[i]))
-                # ~ new_tab_2.write( ' %.1f %.1f %.1f'%(u3[i],u3_up[i],u3_low[i]))
-            if "u4" in m[0].param_list_free:
-                new_tab.write( ' %.1f %.1f %.1f'%(u4[i],u4_up[i],u4_low[i]))
-                # ~ new_tab_2.write( ' %.1f %.1f %.1f'%(u4[i],u4_up[i],u4_low[i]))
+            if input_dict["ld_law"] == "nonlinear":
+                if not bool(int(input_dict['fix_u3'])):
+                    new_tab.write( ' %.1f %.1f %.1f'%(u3[i],u3_up[i],u3_low[i]))
+                    # ~ new_tab_2.write( ' %.1f %.1f %.1f'%(u3[i],u3_up[i],u3_low[i]))
+                if not bool(int(input_dict['fix_u4'])):
+                    new_tab.write( ' %.1f %.1f %.1f'%(u4[i],u4_up[i],u4_low[i]))
+                    # ~ new_tab_2.write( ' %.1f %.1f %.1f'%(u4[i],u4_up[i],u4_low[i]))
 
             new_tab.write('\n')
             new_tab_2.write('\n')
@@ -1123,21 +828,20 @@ def recover_transmission_spectrum(directory,lc_idx=0,save_fig=False,plot_fig=Tru
     if plot_fig:
         if iib:
             if plot_depths:
-                fig = plot_transmission_spectrum(d,d_up,d_low,calibrated_wvl=we,wvl_errors=None,save_fig=save_fig,scale_height=H_Rs**2,iib=True,plot_depths=True,
-                                                 directory=directory)
+                fig = plot_transmission_spectrum(d,d_up,d_low,calibrated_wvl=we,wvl_errors=None,save_fig=save_fig,scale_height=H_Rs**2,iib=True,plot_depths=True)
             else:
-                fig = plot_transmission_spectrum(rp,rp_up,rp_low,calibrated_wvl=we,wvl_errors=None,save_fig=save_fig,scale_height=H_Rs,iib=True,directory=directory)
+                fig = plot_transmission_spectrum(k,k_up,k_low,calibrated_wvl=we,wvl_errors=None,save_fig=save_fig,scale_height=H_Rs,iib=True)
         else:
             if plot_depths:
-                fig = plot_transmission_spectrum(d,d_up,d_low,calibrated_wvl=w,wvl_errors=we/2,save_fig=save_fig,scale_height=H_Rs,plot_depths=True,directory=directory)
+                fig = plot_transmission_spectrum(d,d_up,d_low,calibrated_wvl=w,wvl_errors=we/2,save_fig=save_fig,scale_height=H_Rs,plot_depths=True)
             else:
-                fig = plot_transmission_spectrum(rp,rp_up,rp_low,calibrated_wvl=w,wvl_errors=we/2,save_fig=save_fig,scale_height=H_Rs,directory=directory)
+                fig = plot_transmission_spectrum(k,k_up,k_low,calibrated_wvl=w,wvl_errors=we/2,save_fig=save_fig,scale_height=H_Rs)
         return fig
     else:
         if plot_depths:
             return d,d_up,d_low,w,we,H_Rs
         else:
-            return np.array(rp),np.array(rp_up),np.array(rp_low),w,we,H_Rs
+            return np.array(k),np.array(k_up),np.array(k_low),w,we,H_Rs
 
 def plot_multi_trans_spec(directory_lists,save_fig=False,plot_fig=False):
     """
@@ -1150,50 +854,49 @@ def plot_multi_trans_spec(directory_lists,save_fig=False,plot_fig=False):
 
     Returns:
     matplotlib figure object - if plot_fig = True
-    np.array(rp_all),np.array(rp_up_all),np.array(rp_low_all),np.array(w_all),np.array(we_all),H_Rs - the concatenated Rp/Rs, errors, wavelength bin centres and errors, and atmospheric scale height - if plot_fig = False
+    np.array(k_all),np.array(k_up_all),np.array(k_low_all),np.array(w_all),np.array(we_all),H_Rs - the concatenated Rp/Rs, errors, wavelength bin centres and errors, and atmospheric scale height - if plot_fig = False
 
     Returns:"""
 
-    rp_all = np.array([])
-    rp_up_all = np.array([])
-    rp_low_all = np.array([])
+    k_all = np.array([])
+    k_up_all = np.array([])
+    k_low_all = np.array([])
     w_all = np.array([])
     we_all = np.array([])
 
     for d in directory_lists:
         try:
-            rp,rp_up,rp_low,w,we,H_Rs = recover_transmission_spectrum(d+'best_fit_parameters_GP.txt',d+'fitting_input.txt',False,False)
+            k,k_up,k_low,w,we,H_Rs = recover_transmission_spectrum(d+'best_fit_parameters_GP.txt',d+'fitting_input.txt',False,False)
         except:
-            rp,rp_up,rp_low,w,we,H_Rs = recover_transmission_spectrum(d+'best_fit_parameters_noGP.txt',d+'fitting_input.txt',False,False)
-        rp_all = np.hstack((rp_all,rp))
-        rp_up_all = np.hstack((rp_up_all,rp_up))
-        rp_low_all = np.hstack((rp_low_all,rp_low))
+            k,k_up,k_low,w,we,H_Rs = recover_transmission_spectrum(d+'best_fit_parameters_noGP.txt',d+'fitting_input.txt',False,False)
+        k_all = np.hstack((k_all,k))
+        k_up_all = np.hstack((k_up_all,k_up))
+        k_low_all = np.hstack((k_low_all,k_low))
         w_all = np.hstack((w_all,w))
         we_all = np.hstack((we_all,we))
 
     if plot_fig:
-        fig = plot_transmission_spectrum(d, np.array(rp_all), np.array(rp_up_all), np.array(rp_low_all), calibrated_wvl=np.array(w_all), wvl_errors=np.array(we_all), save_fig=save_fig, scale_height=H_Rs, directory=directory)
+        fig = plot_transmission_spectrum(np.array(k_all),np.array(k_up_all),np.array(k_low_all),calibrated_wvl=np.array(w_all),wvl_errors=np.array(we_all),save_fig=save_fig,scale_height=H_Rs)
         return fig
     else:
-        return np.array(rp_all),np.array(rp_up_all),np.array(rp_low_all),np.array(w_all),np.array(we_all),H_Rs
+        return np.array(k_all),np.array(k_up_all),np.array(k_low_all),np.array(w_all),np.array(we_all),H_Rs
 
 
-def plot_transmission_spectrum(rp_array,rp_upper=None,rp_lower=None,calibrated_wvl=None,wvl_errors=None,bin_width=250,save_fig=False,scale_height=None,model_atmos=None,iib=False,
-                               plot_depths=False,directory='./'):
+def plot_transmission_spectrum(k_array,k_upper=None,k_lower=None,calibrated_wvl=None,wvl_errors=None,bin_width=250,save_fig=False,scale_height=None,model_atmos=None,iib=False,plot_depths=False):
 
     """
     Function that plots the transmission spectrum (Rp/Rs vs wavelength in Angstroms).
 
     Inputs:
-    rp_array - the array of Rp/Rs values
-    rp_upper - the positive errors in Rp/Rs. Default=None
-    rp_lower - the negative errors in Rp/Rs. Default=None
-    calibrated_wvl - the wavelength bin centres. If this is not supplied, the figure will estimate the wavelength bins as an array from 3000-9000A with a length=len(rp_array). Default=None
+    k_array - the array of Rp/Rs values
+    k_upper - the positive errors in Rp/Rs. Default=None
+    k_lower - the negative errors in Rp/Rs. Default=None
+    calibrated_wvl - the wavelength bin centres. If this is not supplied, the figure will estimate the wavelength bins as an array from 3000-9000A with a length=len(k_array). Default=None
     wvl_errors - the wavelength bin half widths, in Angstroms
     bin_width - if calibrated_wvl = None, this defines the xerror. Default=250.
     save_fig - True/False - save the outputted figure or not. Default=False
     scale_height - if wanting the plot the Rp/Rs values in terms of the scale heights on the right-hand y axis, supply this value here as the atmospheric scale height divided by the radius of the star. Default=None (no plotting of this)
-    model_atmos - if wanting to overplot model atmospheres on the transmission spectrum. This should be given as a dictionary as {'binned_wvl':,'binned_rp':,'unbinned_wvl':,'unbinned_rp'}. Default=None (no models plotted)
+    model_atmos - if wanting to overplot model atmospheres on the transmission spectrum. This should be given as a dictionary as {'binned_wvl':,'binned_k':,'unbinned_wvl':,'unbinned_k'}. Default=None (no models plotted)
 
     Returns:
     matplotlib figure object
@@ -1204,29 +907,29 @@ def plot_transmission_spectrum(rp_array,rp_upper=None,rp_lower=None,calibrated_w
 
     #if calibrated_wvl == None:
     if calibrated_wvl is None:
-          wvl = np.linspace(3000,9000,len(rp_array))
+          wvl = np.linspace(3000,9000,len(k_array))
           xerror = bin_width
     else:
           wvl = calibrated_wvl
           xerror = wvl_errors
 
-    if rp_upper is not None:
-        e = (rp_lower,rp_upper)
+    if k_upper is not None:
+        e = (k_lower,k_upper)
 
     else:
         e = None
 
     if iib:
-        ax.errorbar(wvl,rp_array,yerr=e,xerr=xerror,fmt='o',ecolor='k',zorder=10,color='k')
+        ax.errorbar(wvl,k_array,yerr=e,xerr=xerror,fmt='o',ecolor='k',zorder=10,color='k')
     else:
-        ax.errorbar(wvl,rp_array,yerr=e,xerr=xerror,fmt='.',ecolor='k',zorder=10,capsize=2,mfc='white',mec='k')
+        ax.errorbar(wvl,k_array,yerr=e,xerr=xerror,fmt='.',ecolor='k',zorder=10,capsize=2,mfc='white',mec='k')
 
     if model_atmos is not None:
         try:
-            ax.plot(model_atmos['unbinned_wvl'],model_atmos['unbinned_rp'],'b')
+            ax.plot(model_atmos['unbinned_wvl'],model_atmos['unbinned_k'],'b')
         except:
             pass
-        ax.plot(model_atmos['binned_wvl'],model_atmos['binned_rp'],'ro')
+        ax.plot(model_atmos['binned_wvl'],model_atmos['binned_k'],'ro')
 
     if plot_depths:
         ax.set_ylabel('Transit depth $(R_{P}/R_{S})^2$',fontsize=12)
@@ -1266,14 +969,14 @@ def plot_transmission_spectrum(rp_array,rp_upper=None,rp_lower=None,calibrated_w
                        length=4,width=1.)
 
     if save_fig:
-        plt.savefig(directory + '/plots/' + 'transmission_spectrum.pdf',bbox_inches='tight')
+        plt.savefig('transmission_spectrum.pdf',bbox_inches='tight')
         plt.close()
     else:
         plt.show()
 
     return fig
 
-def expected_vs_calculated_ldcs(directory='.',lc_idx=0,save_fig=False,bin_mask=None, best_fit_mode='median'):
+def expected_vs_calculated_ldcs(directory='.',save_fig=False,bin_mask=None):
 
     """
     Function to plot the expected (LDTk-generated) quadratic limb darkening coefficients vs. the actual fitted limb darkening coefficients.
@@ -1281,66 +984,38 @@ def expected_vs_calculated_ldcs(directory='.',lc_idx=0,save_fig=False,bin_mask=N
     This function loads the limb darkening coefficients from files within the cwd, so these do not need to be supplied to the function.
 
     Input:
-    directory  - str, path to files and for saving
-    lc_idx     - int, index of the lightcurve (0 if single lightcurve fit)
-    save_fig   - bool, save the resulting figure? Default=False
-    bin_mask   - list, a list of wavelength bins to be ignored by the plot. Default=None (no masking of bins)
+    save_fig - True/False - save the resulting figure? Default=False
+    bin_mask - a list of wavelength bins to be ignored by the plot. Default=None (no masking of bins)
 
     Returns:
     Nothing, it just plots the figure"""
 
-    wvl_centre,wvl_error,ldtk_u1,ldtk_u1_err,ldtk_u2,ldtk_u2_err,ldtk_u3,ldtk_u3_err,ldtk_u4,ldtk_u4_err = np.loadtxt(f'{directory}/LD_coefficients_lc{lc_idx}.txt',unpack=True)
+    wvl_centre,wvl_error,ldtk_u1,ldtk_u1_err,ldtk_u2,ldtk_u2_err,ldtk_u3,ldtk_u3_err,ldtk_u4,ldtk_u4_err = np.loadtxt('%s/LD_coefficients.txt'%directory,unpack=True)
     wvl_error = wvl_error/2
 
     try:
-        if best_fit_mode == 'median':
-            best_dict = parseInput(directory + '/tables/' + 'fitted_parameters_median.txt')
-        elif best_fit_mode == 'likelihood':
-            best_dict = parseInput(directory + '/tables/' + 'fitted_parameters_max_likelihood.txt')
-        else:
-            raise ValueError("best_fit_mode must be either 'median' or 'likelihood'")
+        best_dict = parseInput('%s/best_fit_parameters.txt'%directory)
     except:
-        best_dict = parseInput(directory + '/tables/' + 'best_fit_parameters_GP.txt')
+        best_dict = parseInput('%sbest_fit_parameters_GP.txt'%directory)
 
-    model_list = glob.glob(f'{directory}/pickled_objects/fitted_lightcurve_model_lc{lc_idx}*.pickle')
+    model_list = glob.glob('%s/prod_model_*.pickle'%directory)
     nbins = len(model_list)
 
-    completed_bins = load_completed_bins(directory,return_index_only=True,mask=bin_mask,lc_idx=lc_idx)
+    completed_bins = load_completed_bins(directory,return_index_only=True,mask=bin_mask)
 
     wvl_centre,wvl_error,ldtk_u1,ldtk_u1_err,ldtk_u2,ldtk_u2_err,ldtk_u3,ldtk_u3_err,ldtk_u4,ldtk_u4_err = np.atleast_1d(wvl_centre)[completed_bins],np.atleast_1d(wvl_error)[completed_bins],\
     np.atleast_1d(ldtk_u1)[completed_bins],np.atleast_1d(ldtk_u1_err)[completed_bins],np.atleast_1d(ldtk_u2)[completed_bins],np.atleast_1d(ldtk_u2_err)[completed_bins],\
     np.atleast_1d(ldtk_u3)[completed_bins],np.atleast_1d(ldtk_u3_err)[completed_bins],np.atleast_1d(ldtk_u4)[completed_bins],np.atleast_1d(ldtk_u4_err)[completed_bins]
 
     m = pickle.load(open(model_list[0],'rb'))
-
-    if "u1" in m.param_list_free:
-        fix_u1 = True
+    fix_u1 = m.fix_u1
+    fix_u2 = m.fix_u2
+    if m.ld_law == "nonlinear":
+        fix_u3 = m.fix_u3
+        fix_u4 = m.fix_u4
     else:
-        fix_u1 = False
-
-    if "u2" in m.param_list_free:
-        fix_u2 = True
-    else:
-        fix_u2 = False
-
-    if "u3" in m.param_list_free:
-        fix_u3 = True
-    else:
-        fix_u3 = False
-
-    if "u4" in m.param_list_free:
+        fix_u3 = True # note these are not used in this case
         fix_u4 = True
-    else:
-        fix_u4 = False
-
-    # fix_u1 = m.fix_u1
-    # fix_u2 = m.fix_u2
-    # if m.ld_law == "nonlinear":
-    #     fix_u3 = m.fix_u3
-    #     fix_u4 = m.fix_u4
-    # else:
-    #     fix_u3 = True # note these are not used in this case
-    #     fix_u4 = True
 
     u1,u1_up,u1_low = [],[],[]
     u2,u2_up,u2_low = [],[],[]
@@ -1472,8 +1147,8 @@ def expected_vs_calculated_ldcs(directory='.',lc_idx=0,save_fig=False,bin_mask=N
 
 
     if save_fig:
-        plt.savefig(f'{directory}/plots/expected_vs_calculated_ldcs_lc{lc_idx}.pdf',bbox_inches='tight')
-        plt.savefig(f'{directory}/plots/expected_vs_calculated_ldcs_lc{lc_idx}.png',bbox_inches='tight')
+        plt.savefig('%s/expected_vs_calculated_ldcs.pdf'%directory,bbox_inches='tight')
+        plt.savefig('%s/expected_vs_calculated_ldcs.png'%directory,bbox_inches='tight')
         plt.close()
     else:
         plt.show()
@@ -1565,22 +1240,22 @@ def bin_model_to_data(model_wvl,model_data,data_wvl,data_wvl_e,bin_break=None):
 
 
 
-def weighted_mean_uneven_errors(rp,rp_up,rp_low,model=1):
+def weighted_mean_uneven_errors(k,k_up,k_low,model=1):
     """A function to calculate the weighted mean of multiple, concatenated, transmission spectra that have un-even (non-symmetric) uncertainties.
 
     This uses the models of Barlow 2003.
 
     Inputs:
-    rp - the concatenated Rp/Rs values
-    rp_up - the concatenated positive uncertainties in Rp/Rs
-    rp_low - the concatenated negative uncertainties in Rp/Rs
+    k - the concatenated Rp/Rs values
+    k_up - the concatenated positive uncertainties in Rp/Rs
+    k_low - the concatenated negative uncertainties in Rp/Rs
     model - the number of the model as given in Barlow 2003 (either 1 or 2)
 
     Returns:
     weighted mean Rp/Rs
     the uncertainties in the weighted mean Rp/Rs values"""
 
-    nvalues = len(rp)
+    nvalues = len(k)
 
     sigma = {}
     alpha = {}
@@ -1596,13 +1271,13 @@ def weighted_mean_uneven_errors(rp,rp_up,rp_low,model=1):
 
     for i in range(nvalues):
 
-        sigma[i+1] = (rp_up[i]+rp_low[i])/2. # eqn 1
-        alpha[i+1] = (rp_up[i]-rp_low[i])/2. # eqn 1
+        sigma[i+1] = (k_up[i]+k_low[i])/2. # eqn 1
+        alpha[i+1] = (k_up[i]-k_low[i])/2. # eqn 1
 
 
         if model == 1:
             V[i+1] = sigma[i+1]**2 + (1 - 2/np.pi)*alpha[i+1]**2 # eqn 18
-            b[i+1] = (rp_up[i]-rp_low[i])/np.sqrt(2*np.pi) # eqn 17
+            b[i+1] = (k_up[i]-k_low[i])/np.sqrt(2*np.pi) # eqn 17
 
         if model == 2:
             V[i+1] = sigma[i+1]**2 + 2*alpha[i+1]**2 # eqn 18
@@ -1610,7 +1285,7 @@ def weighted_mean_uneven_errors(rp,rp_up,rp_low,model=1):
 
         w[i+1] = 1/V[i+1]
 
-        x_numerator += (w[i+1]*(rp[i]-b[i+1])) # eqn 16
+        x_numerator += (w[i+1]*(k[i]-b[i+1])) # eqn 16
         x_denominator += (w[i+1])
 
         e_numerator += (w[i+1]**2)*V[i+1] # below eqn 17
@@ -1619,16 +1294,15 @@ def weighted_mean_uneven_errors(rp,rp_up,rp_low,model=1):
     return x_numerator/x_denominator, np.sqrt(e_numerator/(e_denominator**2))
 
 
-def load_completed_bins(directory=".",start_bin=None,end_bin=None,mask=None,return_index_only=False,lc_idx=0):
+def load_completed_bins(directory=".",start_bin=None,end_bin=None,mask=None,return_index_only=False):
     """A function that loads in all model, time, flux, and error files within the current directory, while working out which bins have successfully completed fitting.
 
     Inputs (all optional):
-    directory         - str, the path to the files to load in. The default is the current working directory, which is nearly always correct
-    start_bin         - int, if wanting to ignore the first N bins, define this number. Default=None
-    end_bin           - int, if wanting to ignore the last N bins, define this number. Default=None
-    mask              - int, if wanting to mask certain bins, parse these bin indices as an array here. Default=None
+    directory: the path to the files to load in. The default is the current working directory, which is nearly always correct
+    start_bin: if wanting to ignore the first N bins, define this number. Default=None
+    end_bin: if wanting to ignore the last N bins, define this number. Default=None
+    mask: if wanting to mask certain bins, parse these bin indices as an array here. Default=None
     return_index_only - True/False : if wanting to only return the indices of the completed bins, set this to True. Default=False.
-    lc_idx            - int, index of the lightcurve (0 if single lightcurve fit)
 
     Returns:
     if return_index_only:
@@ -1637,8 +1311,8 @@ def load_completed_bins(directory=".",start_bin=None,end_bin=None,mask=None,retu
         x,y,e,e_r,m,m_in,w,we,completed_bins,nbins - arrays of time, flux, error, rescaled errors, TransitGPPM models, model input files, wavelength bin centres, wavelength bin widths, the indices of the completed bin fits, the number of bins with completed fits"
     """
 
-    model_files = np.array(sorted(glob.glob(f'{directory}/pickled_objects/fitted_lightcurve_model_lc{lc_idx}_*.pickle')))
-    print(len(model_files), "model files found in directory %s/pickled_objects/ for lightcurve index %d"%(directory,lc_idx))
+    model_files = np.array(sorted(glob.glob('%s/prod_model_*.pickle'%directory)))
+
     # determine the completed bins by finding the XXX number in the "_wbXXX" in the file names
     completed_bins = np.array([int(m.split("wb")[-1].split(".")[0]) for m in model_files])
     if return_index_only:
@@ -1646,31 +1320,26 @@ def load_completed_bins(directory=".",start_bin=None,end_bin=None,mask=None,retu
     nbins = len(completed_bins)
 
     ### Load in data arrays
-    time_files = np.array(["%s/pickled_objects/Used_time_lc%s_wb%s.pickle"%(directory,lc_idx,str(i).zfill(4)) for i in completed_bins])
-    flux_files = np.array(["%s/pickled_objects/Used_flux_lc%s_wb%s.pickle"%(directory,lc_idx,str(i).zfill(4)) for i in completed_bins])
-    error_files = np.array(["%s/pickled_objects/Used_error_lc%s_wb%s.pickle"%(directory,lc_idx,str(i).zfill(4)) for i in completed_bins])
-    model_input_files = np.array(["%s/pickled_objects/Used_model_inputs_lc%s_wb%s.pickle"%(directory,lc_idx,str(i).zfill(4)) for i in completed_bins])
+    time_files = np.array(["%s/sigma_clipped_time_wb%s.pickle"%(directory,str(i).zfill(4)) for i in completed_bins])
+    flux_files = np.array(["%s/sigma_clipped_flux_wb%s.pickle"%(directory,str(i).zfill(4)) for i in completed_bins])
+    error_files = np.array(["%s/sigma_clipped_error_wb%s.pickle"%(directory,str(i).zfill(4)) for i in completed_bins])
+    model_input_files = np.array(["%s/sigma_clipped_model_inputs_wb%s.pickle"%(directory,str(i).zfill(4)) for i in completed_bins])
 
     # For the error, we preferentially used rescaled errors. Either by reduced chi2 for PM fits or by white noise kernel in GP fits.
-    try:
-        rescaled_error_files = np.array(["%s/pickled_objects/Used_rescaled_errors_lc%s_wb%s.pickle"%(directory,lc_idx,str(i).zfill(4)) for i in completed_bins]) # not yet defined for emcee
-    except:
-        pass 
+    rescaled_error_files = np.array(["%s/rescaled_errors_wb%s.pickle"%(directory,str(i).zfill(4)) for i in completed_bins])
 
     x = [pickle.load(open(i,'rb')) for i in time_files]
     y = [pickle.load(open(i,'rb')) for i in flux_files]
     e = [pickle.load(open(i,'rb')) for i in error_files]
     m_in = [pickle.load(open(i,'rb')) for i in model_input_files]
-
     try:
         e_r = [pickle.load(open(i,'rb')) for i in rescaled_error_files]
     except: # we might not have used the rescale error option, so we can't load anything in
         e_r = None
 
     ### Load in LD coefficients table for the wavelength centres and widths of the bins
-    w,we = np.loadtxt(f'{directory}/LD_coefficients_lc{lc_idx}.txt',unpack=True,usecols=[0,1])
-    w, we = np.atleast_1d(w)[completed_bins-1], np.atleast_1d(we)[completed_bins-1]
-    # w,we = np.atleast_1d(w)[completed_bins],np.atleast_1d(we)[completed_bins]
+    w,we = np.loadtxt('%s/LD_coefficients.txt'%directory,unpack=True,usecols=[0,1])
+    w,we = np.atleast_1d(w)[completed_bins-1],np.atleast_1d(we)[completed_bins-1]
 
     ### Bin mask
     if mask is not None:
@@ -1693,10 +1362,7 @@ def load_completed_bins(directory=".",start_bin=None,end_bin=None,mask=None,retu
         x = x[start_bin:end_bin]
         y = y[start_bin:end_bin]
         e = e[start_bin:end_bin]
-        try:
-            e_r = e_r[start_bin:end_bin]
-        except:
-            pass
+        e_r = e_r[start_bin:end_bin]
         model_files = model_files[start_bin:end_bin]
         m_in = m_in[start_bin:end_bin]
         w = w[start_bin:end_bin]
@@ -1790,78 +1456,3 @@ def calc_bin_edges_from_centres(bin_centres):
     first_bin_edge = bin_centres[0] - bin_widths[0]/2
     last_bin_edge = bin_centres[-1] + bin_widths[-1]/2
     return np.hstack((first_bin_edge,bin_edges,last_bin_edge))
-
-
-
-def make_corner_plot(sample_chains, bin_number, namelist, parameter_modes=None,
-                     save_fig=False, title=None, save_folder=None):
-    """Use DFM's corner package to make a corner plot of the emcee chains.
-
-    Input:
-    sample_chains - the emcee chains
-    bin_number - the wavelength bin number, needed for saving the plot to file
-    namelist - a list of parameter names corresponding to the chain
-    parameter_modes - the modes of the parameter distributions
-    save_fig - True/False: do we want to save the figure to file?
-    title - set to a string if wanting to define where the plot is saved to, otherwise default is used. Default=None.
-
-    Returns:
-    Nothing - just plots the figure
-    """
-
-    print('Generating corner plot...')
-    ndim = np.shape(sample_chains)[1]
-    
-    if save_folder is not None:
-            save_folder = save_folder + '/plots/'
-    else:
-        save_folder = ''
-
-    fig = corner(sample_chains,labels=namelist,quantiles=[0.16, 0.5, 0.84],verbose=False,show_titles=True)
-
-    if parameter_modes is not None:
-        overplot_lines(fig, parameter_modes)
-
-    if save_fig:
-        if title is not None:
-            fig.savefig(title)
-        else:
-            fig.savefig(save_folder + 'cornerplot_wb%s.png'%(str(bin_number).zfill(4)))
-        plt.close()
-    else:
-        plt.show()
-
-
-def plot_chains(sampler, burn, wavelength_bin, npars,
-                namelist, discard=0, save_folder=None):
-
-    if save_folder is not None:
-        save_folder = save_folder + '/plots/'
-    else:
-        save_folder = ''
-
-    chain = sampler.get_chain(discard=discard)
-
-    # save plots of chains
-    if npars > 1:
-        fig,axes = plt.subplots(npars,1,sharex=True,figsize=(8,12))
-
-        for j in range(npars):
-            axes[j].plot(chain[:, :, j], color='k', alpha=0.4)
-            axes[j].set_ylabel(namelist[j],fontsize=20)
-        
-        axes[j-1].set_xlabel("step number")
-
-    else:
-        fig,axes = plt.subplots(1,1,figsize=(6,3))
-        
-        axes.plot(chain[:, :, 0], color="k", alpha=0.4)
-        axes.set_ylabel(namelist[0],fontsize=20)
-        axes.set_xlabel("step number")
-
-    fig.tight_layout(h_pad=0.0)
-    if burn:
-        fig.savefig(save_folder + 'burn_chain_wb%s.png'%(str(wavelength_bin+1).zfill(4)))
-    else:
-        fig.savefig(save_folder + 'prod_chain_wb%s.png'%(str(wavelength_bin+1).zfill(4)))
-    plt.close()

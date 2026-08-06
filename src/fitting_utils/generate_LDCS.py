@@ -1,284 +1,246 @@
-#### Author of this code: James Kirk, adapted by Eva-Maria Ahrer
+#### Author of this code: James Kirk
+#### Contact: jameskirk@live.co.uk
 
-
+from ldtk import LDPSetCreator, BoxcarFilter
 import pickle
 import numpy as np
 import argparse
-import os
 from scipy.ndimage import median_filter as MF
 import matplotlib.pyplot as plt
 from global_utils import parseInput
 
-# Get the directory of the current script
-script_dir = os.path.dirname(os.path.abspath(__file__))
+
+parser = argparse.ArgumentParser(description='Generate the limb darkening coefficients for the star evaluated for the wavelength bins provided. This used Limb Darkening Toolkit. Note: The stellar effect temperature, stellar log(g), stellar [Fe/H] and associated errors must be in the fitting_input.txt file for this code to execute. Also, the arrays of wavelength bin centres and widths must be defined in fitting_input.txt. This code returns the quadratic limb darkening coefficients and errors evaluated for each wavelength bin in a file called LD_coefficients.dat.')
+parser.add_argument('-seq','--seq',help="""use this argument if wanting to calculate multiple limb darkening coefficients sequentially (necessary for incrementally increasing Na & K bins)""",action='store_true')
+parser.add_argument('-ld_law','--ld_law',help="""Use this to define the limb darkening law: quadratic (default), linear, nonlinear, squareroot""",default='quadratic')
+parser.add_argument('-um','--microns',help="""Use this if the wavelengths are given in microns""",action='store_true')
+parser.add_argument('-exotic','--use_exotic',help="""Use this if wanting to use Exo-TIC instead of LDTk""",action='store_true')
+parser.add_argument('-ld_ndim','--ld_model_dimensionality',help="""If using Exo-TIC, define whether we're using 1D or 3D models""")
+parser.add_argument('-instrument','--instrument',help="""If using Exo-TIC, define what instrument we're using. e.g. 'JWST_NIRSpec_prism', 'JWST_NIRSpec_G395H', 'JWST_MIRI_LRS', 'JWST_NIRCam_F444'""")
+args = parser.parse_args()
+
+if args.use_exotic:
+    from exotic_ld import StellarLimbDarkening
+
+    # Stellar models: 1D or 3D grid.
+    ld_model_dimensionality = args.ld_model_dimensionality
+
+    # Path to the installed data.
+    ld_data_path = '/Users/james/python/ExoTiC-LD_data'
+
+    # instrument, see https://exotic-ld.readthedocs.io/en/latest/views/supported_instruments.html for full list of supported instruments
+    instrument_mode = args.instrument
+
 
 
 # Load in conrolling parameter file
 input_dict = parseInput('fitting_input.txt')
-output_foldername = input_dict['output_foldername']
-LDCs_package = str(input_dict['LDCs_package'])
-wvl_unit = str(input_dict['wvls_unit'])
-error_inflation = float(input_dict['ld_uncertainty_multiplier'])
-replace_negatives = bool(int(input_dict['replace_negative_LDCs']))
 
-if LDCs_package == 'LDTk':
-    from ldtk import LDPSetCreator, BoxcarFilter
-elif LDCs_package == 'exotic-ld':
-    from exotic_ld import StellarLimbDarkening
-    ld_data_path = str(input_dict['exotic-ld_data_path'])
-    ld_model_dimensionality = str(input_dict['exotic-ld_model_dim'])
-    instrument_mode = str(input_dict['exotic-ld_instrument_mode'])
+# Define whether the coefficients are for the white light curve, in which case we're dealing with a single passband.
+white_light_fit = bool(int(input_dict['white_light_fit']))
 
-    if input_dict['exotic-ld_throughput'] is not None:
-        try:
-            inst_throughput = str(input_dict['exotic-ld_throughput'])
-            thr_file = pickle.load(open(inst_throughput,'rb'))
-            wvs, throughput = thr_file[0], thr_file[1]
-        except:
-            print('For JWST_NIRSpec_G395H')
-            wvs, throughput = np.loadtxt(os.path.join(script_dir, 'NIRSpec_G395H_custom_throughput.txt'), delimiter=',',unpack=True, skiprows=1)
-            wvs *= 1e4 # convert from microns to Angstroms
-    else:
-        if not any(x in instrument_mode for x in ('JWST', 'HST', 'TESS', 'Spitzer')):
-            raise ValueError('Exotic-LD needs throughput for this instrument')
-        else:
-            inst_throughput = None   
-            wvs = None
-            throughput = None
+if white_light_fit:
+    wavelength_centres = float(input_dict['wvl_centres'])
+    wvl_bin_full_width = float(input_dict['wvl_bin_full_width'])
 else:
-    raise ValueError("Only 'LDTk' and 'exotic-ld' are supported for generating limb-darkening from models")
+    wavelength_centres = pickle.load(open(input_dict['wvl_centres'],'rb'))
+    wvl_bin_full_width = pickle.load(open(input_dict['wvl_bin_full_width'],'rb'))
 
-ld_law = str(input_dict['ld_law'])
+    nbins = len(wavelength_centres)
 
-wvl_centres_list = np.array([i for i in input_dict['wvl_centres'].split(',')])
-wvl_bin_full_width_list = np.array([i for i in input_dict['wvl_bin_full_width'].split(',')])
+if args.microns: # have to change to Angstroms
+    wavelength_centres *= 1e4
+    wvl_bin_full_width *= 1e4
 
-nlc = len(wvl_centres_list) # nlc >1 for joint fitting
+# Check that no wavelengths are beyond LDTk's upper limit. If so (e.g. for MIRI), we will have to use a different ExoTIC-LD to estimate the LDCs
+if not args.use_exotic:
+	if white_light_fit:
+	    if 1e-4*(wavelength_centres + wvl_bin_full_width/2) > 5.5:
+	        raise ValueError("Desired maximum wavelength is beyond LDTk's limit of 5.5um. Try using https://exotic-ld.readthedocs.io/en/latest/views/installation.html instead")
+	else:
+	    if 1e-4*(wavelength_centres[-1]+wvl_bin_full_width[-1]/2) > 5.5:
+	        raise ValueError("Desired maximum wavelength is beyond LDTk's limit of 5.5um. Try using https://exotic-ld.readthedocs.io/en/latest/views/installation.html instead")
 
-for ilightcurve in range(nlc):
-    try:
-        wavelength_centres = float(wvl_centres_list[ilightcurve])
-        wvl_bin_full_width = float(wvl_bin_full_width_list[ilightcurve])
-        white_light_fit = True
-    except:
-        wavelength_centres = pickle.load(open(wvl_centres_list[ilightcurve],'rb'))
-        wvl_bin_full_width = pickle.load(open(wvl_bin_full_width_list[ilightcurve],'rb'))
-        white_light_fit = False
-        nbins = len(wavelength_centres)
 
-    if wvl_unit == 'micron': # have to change to Angstroms
-        wavelength_centres *= 1e4
-        wvl_bin_full_width *= 1e4
-        print('Converting micron to angstrom ...')
-    elif wvl_unit == 'angstrom':
-        print('Already using anstrom so no wavelength conversion needed ...')
+### Load in stellar parameters from fitting_input.txt
+
+Teff, Teff_err = float(input_dict['Teff']),float(input_dict['Teff_err'])
+logg_star, logg_star_err = float(input_dict['logg_star']),float(input_dict['logg_star_err'])
+FeH, FeH_err = float(input_dict['FeH']),float(input_dict['FeH_err'])
+
+error_inflation = float(input_dict['ld_uncertainty_multiplier']) # Note: this number is used to inflate the errors in LDCs in case we think errors on stellar parameters are underestimated.
+
+
+### Define functions used by LDTk to generate coefficients
+
+def ld_initialise(Teff,Teff_err,logg,logg_err,Z,Z_err,wvl_centre,wvl_error,ld_uncertainty_multiplier=3):
+    """
+    Function to generate the LDTk model for a list of wavelength bins.
+
+    Inputs:
+    Teff - effective temperature of the star in K
+    Teff_err - error in the star's effective temperature in K
+    logg - the star's surface gravity in c.g.s.
+    logg_err - the error in the star's surface gravity, in c.g.s.
+    Z - the metallicity [Fe/H] of the star
+    Z_err - the error in [Fe/H]
+    wvl_centre - the central wavelengths of the wavelength bins under consideration, in Angstroms
+    wvl_error - the full width of the wavelength bins under consideration, in Angstroms
+    ld_uncertainty_multiplier - the factor by which to multiply the errors in the stellar parameters. This is a conservative approach to estimating the limb darkening coefficients. Default=3
+
+    Returns:
+    ps - the LDTk profile object
+    """
+    # Need to convert wavelengths from Angstroms to nm
+    filters = [BoxcarFilter('%s'%i,c-e//2,c+e//2) for i,(c,e) in enumerate(zip(wvl_centre/10.,wvl_error/10.))]
+
+    # find the maximum resolution (minimum wavelength spacing) in nm
+    resolution = np.diff(wvl_centre).min()/10.
+
+    # find the maximum wavelength considered in nm
+    max_wvl = wvl_centre.max()/10.
+
+    if max_wvl > 2600:
+        model_set = "visir"
     else:
-        raise ValueError("Your wavelength array must be either in 'micron' or 'angstrom'")
+        model_set = "vis"
 
-    # Check that no wavelengths are beyond LDTk's upper limit. If so (e.g. for MIRI), we will have to use a different ExoTIC-LD to estimate the LDCs
-    if LDCs_package == 'LDTk':
-        if white_light_fit:
-            if 1e-4*(wavelength_centres + wvl_bin_full_width/2) > 5.5:
-                raise ValueError("Desired maximum wavelength is beyond LDTk's limit of 5.5um. Try using https://exotic-ld.readthedocs.io/en/latest/views/installation.html instead")
-        else:
-            if 1e-4*(wavelength_centres[-1]+wvl_bin_full_width[-1]/2) > 5.5:
-                raise ValueError("Desired maximum wavelength is beyond LDTk's limit of 5.5um. Try using https://exotic-ld.readthedocs.io/en/latest/views/installation.html instead")
+    if resolution > 5:
+        model_set += "-lowres"
 
+    sc = LDPSetCreator(teff=(Teff,Teff_err),logg=(logg,logg_err),z=(Z,Z_err),filters=filters,dataset=model_set)#,force_download=True)
 
-    ### Load in stellar parameters from fitting_input.txt
+    ps = sc.create_profiles()
+    ps.set_uncertainty_multiplier(ld_uncertainty_multiplier)
 
-    Teff, Teff_err = float(input_dict['Teff']),float(input_dict['Teff_err'])
-    logg_star, logg_star_err = float(input_dict['logg_star']),float(input_dict['logg_star_err'])
-    FeH, FeH_err = float(input_dict['FeH']),float(input_dict['FeH_err'])
+    return ps
 
 
-    ### Define functions used by LDTk to generate coefficients
+def single_ld_model(Teff,Teff_err,logg,logg_err,Z,Z_err,wvl_min,wvl_max,ld_uncertainty_multiplier=3):
+    """
+    Function to generate the LDTk model for a single wavelength bin (e.g. the white light curve).
 
-    def ld_initialise(Teff,Teff_err,logg,logg_err,Z,Z_err,wvl_centre,wvl_error,ld_uncertainty_multiplier=3):
-        """
-        Function to generate the LDTk model for a list of wavelength bins.
+    Inputs:
+    Teff - effective temperature of the star in K
+    Teff_err - error in the star's effective temperature in K
+    logg - the star's surface gravity in c.g.s.
+    logg_err - the error in the star's surface gravity, in c.g.s.
+    Z - the metallicity [Fe/H] of the star
+    Z_err - the error in [Fe/H]
+    wvl_min - the blue edge of the wavelength bin
+    wvl_max - the red edge of the wavelength bin
+    ld_uncertainty_multiplier - the factor by which to multiply the errors in the stellar parameters. This is a conservative approach to estimating the limb darkening coefficients. Default=3
 
-        Inputs:
-        Teff - effective temperature of the star in K
-        Teff_err - error in the star's effective temperature in K
-        logg - the star's surface gravity in c.g.s.
-        logg_err - the error in the star's surface gravity, in c.g.s.
-        Z - the metallicity [Fe/H] of the star
-        Z_err - the error in [Fe/H]
-        wvl_centre - the central wavelengths of the wavelength bins under consideration, in Angstroms
-        wvl_error - the full width of the wavelength bins under consideration, in Angstroms
-        ld_uncertainty_multiplier - the factor by which to multiply the errors in the stellar parameters. This is a conservative approach to estimating the limb darkening coefficients. Default=3
+    Returns:
+    ps - the LDTk profile object
+    """
 
-        Returns:
-        ps - the LDTk profile object
-        """
-        # Need to convert wavelengths from Angstroms to nm
-        filters = [BoxcarFilter('%s'%i,c-e//2,c+e//2) for i,(c,e) in enumerate(zip(wvl_centre/10.,wvl_error/10.))]
+    # Need to convert wavelengths from Angstroms to nm
+    filters = [BoxcarFilter('a',wvl_min/10.,wvl_max/10.)]
 
-        # find the maximum resolution (minimum wavelength spacing) in nm
-        resolution = np.diff(wvl_centre).min()/10.
+    sc = LDPSetCreator(teff=(Teff,Teff_err),logg=(logg,logg_err),z=(Z,Z_err),filters=filters)#,force_download=True)
 
-        # find the maximum wavelength considered in nm
-        max_wvl = wvl_centre.max()/10.
+    ps = sc.create_profiles()
+    ps.set_uncertainty_multiplier(ld_uncertainty_multiplier)
 
-        if max_wvl > 2600:
-            model_set = "visir"
-        else:
-            model_set = "vis"
-
-        if resolution > 5:
-            model_set += "-lowres"
-
-        sc = LDPSetCreator(teff=(Teff,Teff_err),logg=(logg,logg_err),z=(Z,Z_err),filters=filters,dataset=model_set)#,force_download=True)
-
-        ps = sc.create_profiles()
-        ps.set_uncertainty_multiplier(ld_uncertainty_multiplier)
-
-        return ps
+    return ps
 
 
-    def single_ld_model(Teff,Teff_err,logg,logg_err,Z,Z_err,wvl_min,wvl_max,ld_uncertainty_multiplier=3):
-        """
-        Function to generate the LDTk model for a single wavelength bin (e.g. the white light curve).
+def return_ld_components(ld_mod,ld_law,MCMC=True):
+    """The function that returns the quadratic limb darkening coefficients for the LDTk profile object.
 
-        Inputs:
-        Teff - effective temperature of the star in K
-        Teff_err - error in the star's effective temperature in K
-        logg - the star's surface gravity in c.g.s.
-        logg_err - the error in the star's surface gravity, in c.g.s.
-        Z - the metallicity [Fe/H] of the star
-        Z_err - the error in [Fe/H]
-        wvl_min - the blue edge of the wavelength bin
-        wvl_max - the red edge of the wavelength bin
-        ld_uncertainty_multiplier - the factor by which to multiply the errors in the stellar parameters. This is a conservative approach to estimating the limb darkening coefficients. Default=3
+    Inputs:
+    ld_mod - the LDTk profile object ('ps')
+    ld_law - str - either 'quadratic', 'linear', 'nonlinear', 'squareroot'
+    MCMC - True/False - use MCMC to perform parameter estimation? Default=True
 
-        Returns:
-        ps - the LDTk profile object
-        """
+    Returns:
+    coeffs - the quadratic (u1 & u2) limb darkening coefficients for all bins
+    errors - the uncertainties in u1 & u2"""
 
-        # Need to convert wavelengths from Angstroms to nm
-        filters = [BoxcarFilter('a',wvl_min/10.,wvl_max/10.)]
+    if ld_law == 'quadratic':
+        coeffs,errors = ld_mod.coeffs_qd(do_mc=False)        # Estimate quadratic law LD_coefficients
+    elif ld_law == "linear":
+        coeffs,errors = ld_mod.coeffs_ln(do_mc=MCMC)
+    elif ld_law == "nonlinear":
+        coeffs,errors = ld_mod.coeffs_nl(do_mc=MCMC)
+    elif ld_law == "squareroot":
+        coeffs,errors = ld_mod.coeffs_sq(do_mc=MCMC)
+    else:
+        return NameError("args.ld_law must be one of quadratic/linear/nonlinear/squareroot")
 
-        sc = LDPSetCreator(teff=(Teff,Teff_err),logg=(logg,logg_err),z=(Z,Z_err),filters=filters)#,force_download=True)
-
-        ps = sc.create_profiles()
-        ps.set_uncertainty_multiplier(ld_uncertainty_multiplier)
-
-        return ps
+    return coeffs,errors
 
 
-    def return_ld_components(ld_mod,ld_law,MCMC=True):
-        """The function that returns the quadratic limb darkening coefficients for the LDTk profile object.
+def exotic_ldcs(stellar_params,instrument_mode,wvl_centre,wvl_error,ld_law,ld_model,ld_data_path):
 
-        Inputs:
-        ld_mod - the LDTk profile object ('ps')
-        ld_law - str - either 'quadratic', 'linear', 'nonlinear', 'squareroot'
-        MCMC - True/False - use MCMC to perform parameter estimation? Default=True
+    M_H, Teff, logg = stellar_params
 
-        Returns:
-        coeffs - the quadratic (u1 & u2) limb darkening coefficients for all bins
-        errors - the uncertainties in u1 & u2"""
+    sld = StellarLimbDarkening(M_H, Teff, logg, ld_model, ld_data_path)
 
-        if ld_law == 'quadratic':
-            coeffs,errors = ld_mod.coeffs_qd(do_mc=False)        # Estimate quadratic law LD_coefficients
-        elif ld_law == "linear":
-            coeffs,errors = ld_mod.coeffs_ln(do_mc=MCMC)
-        elif ld_law == "nonlinear":
-            coeffs,errors = ld_mod.coeffs_nl(do_mc=MCMC)
-        elif ld_law == "squareroot":
-            coeffs,errors = ld_mod.coeffs_sq(do_mc=MCMC)
-        else:
-            return NameError("ld_law must be one of quadratic/linear/nonlinear/squareroot")
+    wvl_centre = np.atleast_1d(wvl_centre)
+    wvl_error = np.atleast_1d(wvl_error)
 
-        return coeffs,errors
+    nbins = len(wvl_centre)
 
+    coeffs = []
 
-    def exotic_ldcs(stellar_params,instrument_mode,wvl_centre,wvl_error,ld_law,ld_model,ld_data_path,wvs=None,throughput=None):
+    for i in range(nbins):
+        # Start and end of wavelength interval [angstroms].
+        wavelength_range = [wvl_centre[i]-wvl_error[i]/2,wvl_centre[i]+wvl_error[i]/2]
 
-        M_H, Teff, logg = stellar_params
+        if ld_law == "linear":
+            c = sld.compute_linear_ld_coeffs(wavelength_range, instrument_mode)
 
-        sld = StellarLimbDarkening(M_H, Teff, logg, ld_model, ld_data_path)
+        if ld_law == "quadratic":
+            c = sld.compute_quadratic_ld_coeffs(wavelength_range, instrument_mode)
 
-        wvl_centre = np.atleast_1d(wvl_centre)
-        wvl_error = np.atleast_1d(wvl_error)
+        if ld_law == "nonlinear":
+            c = sld.compute_4_parameter_non_linear_ld_coeffs(wavelength_range, instrument_mode)
 
-        nbins = len(wvl_centre)
+        coeffs.append(c)
 
-        coeffs = []
-
-        for i in range(nbins):
-            # Start and end of wavelength interval [angstroms].
-            wavelength_range = [wvl_centre[i]-wvl_error[i]/2,wvl_centre[i]+wvl_error[i]/2]
-
-            if ld_law == "linear":
-                c = sld.compute_linear_ld_coeffs(wavelength_range, instrument_mode,
-                                                  custom_wavelengths=wvs,
-                                                  custom_throughput=throughput)
-
-            if ld_law == "quadratic":
-                c = sld.compute_quadratic_ld_coeffs(wavelength_range, instrument_mode,
-                                                  custom_wavelengths=wvs,
-                                                  custom_throughput=throughput)
-
-            if ld_law == "nonlinear":
-                c = sld.compute_4_parameter_non_linear_ld_coeffs(wavelength_range, instrument_mode,
-                                                  custom_wavelengths=wvs,
-                                                  custom_throughput=throughput)
-
-            coeffs.append(c)
-
-        return np.array(coeffs),np.zeros_like(coeffs)
+    return np.array(coeffs),np.zeros_like(coeffs)
 
 
-    if LDCs_package == 'LDTk':
-        print('Generating LDTk model...')
 
-    if white_light_fit: # we're only calculating coefficients for a single wavelength bin
-        if LDCs_package == 'LDTk':
-            ld_model = single_ld_model(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,wavelength_centres-wvl_bin_full_width//2,wavelength_centres+wvl_bin_full_width//2,error_inflation)
+if not args.use_exotic:
+    print('Generating LDTk model...')
 
-    else: # we're considering multiple bins
+if white_light_fit: # we're only calculating coefficients for a single wavelength bin
+    if not args.use_exotic:
+        ld_model = single_ld_model(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,wavelength_centres-wvl_bin_full_width//2,wavelength_centres+wvl_bin_full_width//2,error_inflation)
+
+else: # we're considering multiple bins
+
+    if args.seq: # calculate single model each time
 
         u1,u1e,u2,u2e,u3,u3e,u4,u4e = [],[],[],[],[],[],[],[]
 
         for i in range(nbins):
 
-            if LDCs_package == 'LDTk':
+            if not args.use_exotic:
                 ld_model = single_ld_model(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,wavelength_centres[i]-wvl_bin_full_width[i]//2,wavelength_centres[i]+wvl_bin_full_width[i]//2,error_inflation)
                 print('....LDTk model loaded for bin %d/%d \n'%(i+1,nbins))
 
-                coeffs,errors = return_ld_components(ld_model,ld_law,MCMC=True)
+                coeffs,errors = return_ld_components(ld_model,args.ld_law,MCMC=True)
                 print('....coefficients calculated for bin %d/%d \n'%(i+1,nbins))
 
-            if LDCs_package == 'exotic-ld':
-                try:
-                    if (throughput is not None) and (wvs is not None):
-                        coeffs, errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres[i],wvl_bin_full_width[i],ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
-                    else:
-                        coeffs, errors = exotic_ldcs([FeH,Teff,logg_star],instrument_mode,wavelength_centres[i],wvl_bin_full_width[i],ld_law,ld_model_dimensionality,ld_data_path)
-                except:
-                    if instrument_mode=='JWST_NIRSpec_G395H':
-                        print("Error calculating LDCs with Exo-TIC-LD. This is likely because your wavelength range extends beyond the range of the model. Using custom throughput file for JWST_NIRSpec_G395H.")
-                        wvs, throughput = np.loadtxt(os.path.join(script_dir, 'NIRSpec_G395H_custom_throughput.txt'), delimiter=',',unpack=True, skiprows=1)
-                        wvs *= 1e4 # convert from microns to Angstroms
-                        coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres[i],wvl_bin_full_width[i],ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
-                    if instrument_mode == 'EFOSC2':
-                        coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres[i],wvl_bin_full_width[i],ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
-
-
+            else:
+                coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],instrument_mode,wavelength_centres[i],wvl_bin_full_width[i],args.ld_law,ld_model_dimensionality,ld_data_path)
                 print('....coefficients calculated for bin %d/%d \n'%(i+1,nbins))
 
             u1.append(coeffs[0][0])
             u1e.append(errors[0][0])
 
-            if ld_law != "linear":
+            if args.ld_law != "linear":
                 u2.append(coeffs[0][1])
                 u2e.append(errors[0][1])
             else:
                 u2.append(-99) # use -99 as flag that this value is not used
                 u2e.append(-99)
 
-            if ld_law == "nonlinear":
+            if args.ld_law == "nonlinear":
                 u3.append(coeffs[0][2])
                 u3e.append(errors[0][2])
 
@@ -292,81 +254,68 @@ for ilightcurve in range(nlc):
                 u4e.append(-99)
 
 
-        if LDCs_package == 'LDTk':
+    else:
+        if not args.use_exotic:
             ld_model = ld_initialise(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,wavelength_centres,wvl_bin_full_width,error_inflation)
 
 
-    def replace_negatives_with_median(arr):
-        arr = arr.copy()
-        n = len(arr)
-        nreplacements = 0
+def replace_negatives_with_median(arr):
+    arr = arr.copy()
+    n = len(arr)
+    nreplacements = 0
 
-        for i in range(n):
-            if arr[i] < 0:
-                nreplacements += 1
-                # Find nearest non-negative value to the left
-                left = None
-                for j in range(i - 1, -1, -1):
-                    if arr[j] >= 0:
-                        left = arr[j]
-                        break
+    for i in range(n):
+        if arr[i] < 0:
+            nreplacements += 1
+            # Find nearest non-negative value to the left
+            left = None
+            for j in range(i - 1, -1, -1):
+                if arr[j] >= 0:
+                    left = arr[j]
+                    break
 
-                # Find nearest non-negative value to the right
-                right = None
-                for j in range(i + 1, n):
-                    if arr[j] >= 0:
-                        right = arr[j]
-                        break
+            # Find nearest non-negative value to the right
+            right = None
+            for j in range(i + 1, n):
+                if arr[j] >= 0:
+                    right = arr[j]
+                    break
 
-                # Determine replacement
-                if left is not None and right is not None:
-                    arr[i] = np.median([left, right])
-                elif left is not None:
-                    arr[i] = left
-                elif right is not None:
-                    arr[i] = right
-                else:
-                    raise ValueError("No non-negative values found in array")
+            # Determine replacement
+            if left is not None and right is not None:
+                arr[i] = np.median([left, right])
+            elif left is not None:
+                arr[i] = left
+            elif right is not None:
+                arr[i] = right
+            else:
+                raise ValueError("No non-negative values found in array")
 
-        print("%d negative LD coefficients replaced"%nreplacements)
+    print("%d negative LD coefficients replaced"%nreplacements)
 
-        return arr
+    return arr
 
-
-    if LDCs_package == 'LDTk':
+if not args.seq:
+    if not args.use_exotic:
         print('....LDTk model loaded \n')
 
         print('Calculating coefficients...')
-        coeffs,errors = return_ld_components(ld_model,ld_law)
-    if LDCs_package == 'exotic-ld':
+        coeffs,errors = return_ld_components(ld_model,args.ld_law)
+    else:
         print('Calculating coefficients...')
-        try:
-            if (throughput is not None) and (wvs is not None):
-                coeffs, errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres,wvl_bin_full_width,ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
-            else:
-                coeffs, errors = exotic_ldcs([FeH,Teff,logg_star],instrument_mode,wavelength_centres,wvl_bin_full_width,ld_law,ld_model_dimensionality,ld_data_path)
-        except:
-            if instrument_mode=='JWST_NIRSpec_G395H':
-                print("Error calculating LDCs with Exo-TIC-LD. This is likely because your wavelength range extends beyond the range of the model. Using custom throughput file for JWST_NIRSpec_G395H.")
-                wvs, throughput = np.loadtxt(os.path.join(script_dir, 'NIRSpec_G395H_custom_throughput.txt'), delimiter=',',unpack=True, skiprows=1)
-                wvs *= 1e4 # convert from microns to Angstroms
-                coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres,wvl_bin_full_width,ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
-            if instrument_mode == 'EFOSC2':
-                coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],'custom',wavelength_centres,wvl_bin_full_width,ld_law,ld_model_dimensionality,ld_data_path,wvs=wvs,throughput=throughput)
+        coeffs,errors = exotic_ldcs([FeH,Teff,logg_star],instrument_mode,wavelength_centres,wvl_bin_full_width,args.ld_law,ld_model_dimensionality,ld_data_path)
 
     u1,u1e = coeffs[:,0],errors[:,0]
-    if replace_negatives:
-        u1 = replace_negatives_with_median(u1)
+    u1 = replace_negatives_with_median(u1)
 
-    if ld_law != "linear":
+    if args.ld_law != "linear":
         u2,u2e = coeffs[:,1],errors[:,1]
-        if replace_negatives:
-            u2 = replace_negatives_with_median(u2)
+        u2 = replace_negatives_with_median(u2)
     else:
         u2 = [-99]*len(u1) # pad with blank space
         u2e = [-99]*len(u1)
 
-    if ld_law == "nonlinear":
+    if args.ld_law == "nonlinear":
         u3,u3e = coeffs[:,2],errors[:,2]
         u4,u4e = coeffs[:,3],errors[:,3]
     else:
@@ -378,94 +327,94 @@ for ilightcurve in range(nlc):
 
 
 
-    ### Save results to table
+### Save results to table
 
-    if wvl_unit == 'micron':
-        wavelength_centres /= 1e4
-        wvl_bin_full_width /= 1e4
+if args.microns:
+    wavelength_centres /= 1e4
+    wvl_bin_full_width /= 1e4
 
-    def round_up_to_odd(f):
-        f = int(np.ceil(f))
-        return f + 1 if f % 2 == 0 else f
+def round_up_to_odd(f):
+    f = int(np.ceil(f))
+    return f + 1 if f % 2 == 0 else f
 
-    def smooth_ld(w,u,ue):
+def smooth_ld(w,u,ue):
 
-        if np.all(np.array(u) == -99):
-            return u,ue
+    if np.all(np.array(u) == -99):
+        return u,ue
 
-        if len(u) < 100:
-            box_width = 3
-        else:
-            box_width = round_up_to_odd(len(u)/100)
-        if box_width < 3:
-            box_width = 3
-
-        running_median = MF(u,box_width)
-        u_poly = np.poly1d(np.polyfit(w,running_median,2))
-
-        running_median_up = MF(u+ue,box_width)
-        ue_poly_up = np.poly1d(np.polyfit(w,running_median_up,2))
-
-        running_median_lo = MF(u-ue,box_width)
-        ue_poly_lo = np.poly1d(np.polyfit(w,running_median_lo,2))
-
-        smoothed_u = u_poly(w)
-        smoothed_ue_up = ue_poly_up(w)
-        smoothed_ue_lo = ue_poly_lo(w)
-        smoothed_ue = np.mean((smoothed_ue_up-smoothed_u,smoothed_u-smoothed_ue_lo),axis=0)
-
-        return smoothed_u,smoothed_ue
-
-    tab = open(output_foldername + '/' + 'LD_coefficients_lc{}.txt'.format(ilightcurve),'w')
-    tab.write('# Teff = %d +/- %.2f K ; log(g) = %.2f +/- %.2f ; FeH = %.2f +/- %.2f ; u error inflation factor = %.1f \n'%(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,error_inflation))
-    tab.write('# %s law used \n'%(ld_law))
-    if LDCs_package == 'exotic-ld':
-        tab.write("# Exo-TIC-LD used with a %s model for instrument %s \n"%(ld_model_dimensionality,instrument_mode))
-    if LDCs_package == 'LDTk':
-        tab.write("# LDTk used")
-    tab.write('# Wavelength | Width | u1 | u1 error | u2 | u2 error | u3 | u3 error | u4 | u4 error |\n')
-
-    if white_light_fit:
-        tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres,wvl_bin_full_width,u1[0],u1e[0],u2[0],u2e[0],u3[0],u3e[0],u4[0],u4e[0]))
+    if len(u) < 100:
+        box_width = 3
     else:
-        tab.write("# %d wavelength bins \n"%len(wavelength_centres))
-        smoothed_tab = open(output_foldername + '/' + 'LD_coefficients_smoothed_lc{}.txt'.format(ilightcurve),'w')
-        smoothed_tab.write('# Teff = %d +/- %.2f K ; log(g) = %.2f +/- %.2f ; FeH = %.2f +/- %.2f ; u error inflation factor = %.1f \n'%(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,error_inflation))
-        smoothed_tab.write('# %s law used \n'%(ld_law))
-        if LDCs_package == 'exotic-ld':
-            smoothed_tab.write("# Exo-TIC-LD used with a %s model for instrument %s \n"%(ld_model_dimensionality,instrument_mode))
-        if LDCs_package == 'LDTk':
-            smoothed_tab.write("# LDTk used")
-        smoothed_tab.write("# Quadratic polynomial was used to smooth the limb darkening coefficients \n")
-        smoothed_tab.write("# %d wavelength bins \n"%len(wavelength_centres))
-        smoothed_tab.write('# Wavelength | Width | u1 | u1 error | u2 | u2 error | u3 | u3 error | u4 | u4 error |\n')
+        box_width = round_up_to_odd(len(u)/100)
+    if box_width < 3:
+        box_width = 3
 
-        u1_smoothed,u1e_smoothed = smooth_ld(wavelength_centres,u1,u1e)
-        u2_smoothed,u2e_smoothed = smooth_ld(wavelength_centres,u2,u2e)
-        u3_smoothed,u3e_smoothed = smooth_ld(wavelength_centres,u3,u3e)
-        u4_smoothed,u4e_smoothed = smooth_ld(wavelength_centres,u4,u4e)
+    running_median = MF(u,box_width)
+    u_poly = np.poly1d(np.polyfit(w,running_median,2))
 
-        for i in range(nbins):
-            tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres[i],wvl_bin_full_width[i],u1[i],u1e[i],u2[i],u2e[i],u3[i],u3e[i],u4[i],u4e[i]))
-            smoothed_tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres[i],wvl_bin_full_width[i],u1_smoothed[i],u1e_smoothed[i],u2_smoothed[i],u2e_smoothed[i],u3_smoothed[i],u3e_smoothed[i],u4_smoothed[i],u4e_smoothed[i]))
+    running_median_up = MF(u+ue,box_width)
+    ue_poly_up = np.poly1d(np.polyfit(w,running_median_up,2))
 
-        tab.close()
-        smoothed_tab.close()
+    running_median_lo = MF(u-ue,box_width)
+    ue_poly_lo = np.poly1d(np.polyfit(w,running_median_lo,2))
 
-        plt.figure()
-        plt.plot(wavelength_centres,u1,label="u1")
-        plt.plot(wavelength_centres,u1_smoothed,label="u1_smoothed")
-        plt.fill_between(wavelength_centres,u1_smoothed+u1e_smoothed,u1_smoothed-u1e_smoothed,color="gray",alpha=0.5)
-        plt.plot(wavelength_centres,u2,label="u2")
-        plt.plot(wavelength_centres,u2_smoothed,label="u2_smoothed")
-        plt.fill_between(wavelength_centres,u2_smoothed+u2e_smoothed,u2_smoothed-u2e_smoothed,color="gray",alpha=0.5)
-        plt.legend()
-        plt.xlabel("Wavelength")
-        plt.ylabel("Coefficient value")
-        plt.savefig(output_foldername + '/plots/LD_model_values_lc{}.png'.format(ilightcurve),bbox_inches="tight",dpi=360)
-        # plt.show()
+    smoothed_u = u_poly(w)
+    smoothed_ue_up = ue_poly_up(w)
+    smoothed_ue_lo = ue_poly_lo(w)
+    smoothed_ue = np.mean((smoothed_ue_up-smoothed_u,smoothed_u-smoothed_ue_lo),axis=0)
+
+    return smoothed_u,smoothed_ue
+
+tab = open('LD_coefficients.txt','w')
+tab.write('# Teff = %d +/- %.2f K ; log(g) = %.2f +/- %.2f ; FeH = %.2f +/- %.2f ; u error inflation factor = %.1f \n'%(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,error_inflation))
+tab.write('# %s law used \n'%(args.ld_law))
+if args.use_exotic:
+	tab.write("# Exo-TIC-LD used with a %s model for instrument %s \n"%(args.ld_model_dimensionality,args.instrument))
+else:
+	tab.write("# LDTk used")
+tab.write('# Wavelength | Width | u1 | u1 error | u2 | u2 error | u3 | u3 error | u4 | u4 error |\n')
+
+if white_light_fit:
+    tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres,wvl_bin_full_width,u1[0],u1e[0],u2[0],u2e[0],u3[0],u3e[0],u4[0],u4e[0]))
+else:
+    tab.write("# %d wavelength bins \n"%len(wavelength_centres))
+    smoothed_tab = open('LD_coefficients_smoothed.txt','w')
+    smoothed_tab.write('# Teff = %d +/- %.2f K ; log(g) = %.2f +/- %.2f ; FeH = %.2f +/- %.2f ; u error inflation factor = %.1f \n'%(Teff,Teff_err,logg_star,logg_star_err,FeH,FeH_err,error_inflation))
+    smoothed_tab.write('# %s law used \n'%(args.ld_law))
+    if args.use_exotic:
+    	smoothed_tab.write("# Exo-TIC-LD used with a %s model for instrument %s \n"%(args.ld_model_dimensionality,args.instrument))
+    else:
+    	smoothed_tab.write("# LDTk used")
+    smoothed_tab.write("# Quadratic polynomial was used to smooth the limb darkening coefficients \n")
+    smoothed_tab.write("# %d wavelength bins \n"%len(wavelength_centres))
+    smoothed_tab.write('# Wavelength | Width | u1 | u1 error | u2 | u2 error | u3 | u3 error | u4 | u4 error |\n')
+
+    u1_smoothed,u1e_smoothed = smooth_ld(wavelength_centres,u1,u1e)
+    u2_smoothed,u2e_smoothed = smooth_ld(wavelength_centres,u2,u2e)
+    u3_smoothed,u3e_smoothed = smooth_ld(wavelength_centres,u3,u3e)
+    u4_smoothed,u4e_smoothed = smooth_ld(wavelength_centres,u4,u4e)
+
+    for i in range(nbins):
+        tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres[i],wvl_bin_full_width[i],u1[i],u1e[i],u2[i],u2e[i],u3[i],u3e[i],u4[i],u4e[i]))
+        smoothed_tab.write('%f %f %.4f %.4f %.4f %.4f %.4f %.4f %.4f %.4f \n'%(wavelength_centres[i],wvl_bin_full_width[i],u1_smoothed[i],u1e_smoothed[i],u2_smoothed[i],u2e_smoothed[i],u3_smoothed[i],u3e_smoothed[i],u4_smoothed[i],u4e_smoothed[i]))
+
+    tab.close()
+    smoothed_tab.close()
+
+    plt.figure()
+    plt.plot(wavelength_centres,u1,label="u1")
+    plt.plot(wavelength_centres,u1_smoothed,label="u1_smoothed")
+    plt.fill_between(wavelength_centres,u1_smoothed+u1e_smoothed,u1_smoothed-u1e_smoothed,color="gray",alpha=0.5)
+    plt.plot(wavelength_centres,u2,label="u2")
+    plt.plot(wavelength_centres,u2_smoothed,label="u2_smoothed")
+    plt.fill_between(wavelength_centres,u2_smoothed+u2e_smoothed,u2_smoothed-u2e_smoothed,color="gray",alpha=0.5)
+    plt.legend()
+    plt.xlabel("Wavelength")
+    plt.ylabel("Coefficient value")
+    plt.savefig("LD_model_values.png",bbox_inches="tight",dpi=360)
+    plt.show()
 
 
-    ### Pickle LDTk model in case we need it later
-    if LDCs_package == 'LDTk':
-        pickle.dump(ld_model,open(output_foldername + '/tables/ldtk_model_lc{}.pickle'.format(ilightcurve),'wb'))
+### Pickle LDTk model in case we need it later
+if not args.seq and not args.use_exotic:
+    pickle.dump(ld_model,open('ldtk_model.pickle','wb'))
