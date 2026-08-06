@@ -3,7 +3,6 @@
 
 from astropy.io import fits
 from astropy.modeling.models import Moffat1D
-import astropy.units as u
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats,optimize,interpolate
@@ -19,7 +18,6 @@ with warnings.catch_warnings():
     # This is to supress the warnings that are generated upon importing pysynphot and are only becuase we've not downloaded the calibration files - which are not needed by us
     warnings.filterwarnings("ignore", category=UserWarning)
     from synphot import SourceSpectrum, SpectralElement, Observation
-    from synphot.models import Empirical1D
 
 
 def rebin_spec(wave, specin, wavnew):
@@ -34,31 +32,12 @@ def rebin_spec(wave, specin, wavnew):
     Returns:
     resampled_spectra - the 1D array of the resampled 1D spectrum/errors"""
 
-    #spec = SourceSpectrum.from_array(wave=wave, flux=specin)
-
-    #f = np.ones(len(wave))
-    #filt = SpectralElement.from_array(wave, f, waveunits='angstrom')
-    #obs = Observation(spec, filt, binset=wavnew, force='taper')
-
-    # Create spectrum - use any accepted unit as placeholder
-    spec = SourceSpectrum(
-        Empirical1D,
-        points=wave * u.AA,
-        lookup_table=specin * u.Unit('photlam')  # photons/s/cm²/Å
-    )
-    
-    # Create flat filter (unity throughput)
+    spec = SourceSpectrum.from_array(wave=wave, flux=specin)
     f = np.ones(len(wave))
-    filt = SpectralElement(
-        Empirical1D,
-        points=wave * u.AA,
-        lookup_table=f * u.dimensionless_unscaled
-    )
-    
-    # Resample onto new wavelength grid
-    obs = Observation(spec, filt, binset=wavnew * u.AA, force='taper')
+    filt = SpectralElement.from_array(wave, f, waveunits='angstrom')
+    obs = Observation(spec, filt, binset=wavnew, force='taper')
 
-    return obs.binflux.value
+    return obs.binflux
 
 
 def resample_spectra(current_pixels,star,error,sampled_grid):
